@@ -1,0 +1,76 @@
+ALERT REVIEW SUMMARY
+Alert ID: [Alert ID]
+Customer: [Subject Name]
+Program: [Program Name]
+Rule(s) Triggered: [Rule Name]
+Country Risk Rating: [Country Risk]
+________________________________________
+CUSTOMER PROFILE AND PROGRAM AFFILIATION
+[Subject Name] is a customer enrolled in the [Program Name] program. [Program Description]
+
+The customer is located at [Location].
+
+An external search of the address indicates that it is a <residential property / shared space / dedicated office / commercial property>.
+
+[External Research] An internet search for [Subject Name] returned results as <Individual: occupation and employer / Entity: line of business>.
+
+[Internal Research from Power BI]
+[Option 1 – Individual] Additionally, the customer’s full name and email address were identified through internal records as <“Name”> and <“Email”>, which <analysis of comparison of customer details between internal and external research, including support for validation of any information identified in the external research>.
+[Option 2 – Entity] Additionally, the customer’s full name, address and industry were identified through internal records as <“Name”>, <“Address”> and <“Industry type”>, which <analysis of comparison, including any required additional OSDD in case of discrepancy, of customer details between internal and external research, including support for validation of any information identified in the external research>.
+
+[Negative News] A negative news search did not return any adverse or derogatory information about [Subject Name].
+________________________________________
+ALERT TRIGGER AND TRANSACTION REVIEW
+[Alert ID] alerted due to [Rule Name].
+
+A review of the alerted transactions was conducted covering the period from [Start Date] to [End Date]. The review yielded the following results:
+
+Between [Start Date] and [End Date], there were [Num Trans] transactions totaling $[Total Amount]. This includes [Num Dr] debit transactions of <transaction type(s): e.g., wires, ATM withdrawals, ACH transfers, card purchases etc.> totaling $[Dr] and [Num Cr] credit transactions of <transaction type(s): e.g., incoming wires, ACH credits, deposits etc.> totaling $[Cr].
+
+[GALILEO ACCOUNT – if applicable] These transactions are identified as <transaction type(s): e.g., wires, ATM withdrawals etc.> by <Customer Name / Third Party etc.> through their [Program Name] account <GAL Account #>.
+
+These transactions were conducted by [Subject Name] through their [Program Name] account [Account Numbers] with the following counterparties: [Counterparties].
+
+[Subject Name] conducted transactions with the identified counterparty(s) in connection with <Activity Description – edit case to case specific>.
+
+[Option 1 – Individual] The alerted activity is consistent with the customer’s expected financial behavior and does not appear to be inconsistent with the stated purpose of the account.
+[Option 2 – Entity] <Include rationale for why the alerted activity is consistent with the customer’s profile and product usage – consider the illustrative rationales from the comment, making it specific to the alert / transactions under review.>
+
+[Non-alerted Activity Review]
+Other Activity Review:
+[Option 1 – Individual] The non-alerted activity includes <# number of DR transactions> debit transactions of <transaction type(s): e.g., wires, ATM withdrawals, ACH transfers, card purchases etc.> totaling <$ DR amount> and <# number of CR transactions> credit transactions of <transaction type(s): e.g., incoming wires, ACH credits, deposits etc.> totaling <$ CR amount>.
+[Option 2 – Entity] The non-alerted activity includes debit transactions of <transaction type(s): e.g., wires, ATM withdrawals, ACH transfers, card purchases etc.> and credit transactions of <transaction type(s): e.g., incoming wires, ACH credits, deposits etc.>.
+
+<Highlight counterparties / transaction patterns from the non-alerted activity which are similar to / same as the counterparties / transaction patterns from the alerted activity and include rationale for their consistency.>
+
+The other activity review appears reasonable and consistent with the alerted activity.
+________________________________________
+[Counterparty Research]
+The following counterparty(s) were selected based on the identified customer rule types and their transaction value observed in the alerted transaction activity:
+
+Counterparty 1: [CP 1]
+<Counterparty Details>
+[Negative News] A negative news search did not return any adverse or derogatory information about [CP 1].
+
+Counterparty 2: [CP 2]
+<Counterparty Details>
+[Negative News] A negative news search did not return any adverse or derogatory information about [CP 2].
+
+<Repeat for each counterparty reviewed; delete unused counterparty blocks.>
+
+Additionally, <Counterparty name> was also identified as one of the counterparties, which is a listed entity. Hence, no due diligence was performed.
+
+[Option 1 – Individual] Research identified <counterparty/customer> as <relationship/business/personal connection, if known>. No adverse media, sanctions, negative news, or other derogatory information was identified. The counterparties appear to have a reasonable relationship to the customer and are consistent with the customer’s known profile and account usage.
+[Option 2 – Entity] Research identified the counterparties as <customers/vendors/business partners/service providers> that appear reasonably connected to the customer’s business operations. No adverse media, sanctions concerns, or other negative information were identified through available research.
+________________________________________
+CONCLUSION
+[Option 1 – Individual] The customer is identified as <occupation/employment status> residing in <Country>. External research supports the customer’s stated profile and identified no adverse information.
+[Option 2 – Entity] The customer is operating in <Country> with a stated business purpose of <line of business>. External research validates the existence of the business and is consistent with <customer’s industry type>.
+
+<Document why the transaction pattern appears to be reasonable, including strong mitigating rationale to justify the same: key considerations – location of customer, transaction location, customer occupation, relationship with counterparty etc.>
+<Document why non-alerted activity is reasonable, including strong rationale to justify the same: key considerations – highlight any transaction pattern supporting the mitigating rationale. Use context from non-alerted activity to disposition the alert.>
+<Include commentary on transaction value, volume and frequency that supports the rationale.>
+<Include analysis of why the alerted activity is not suspicious. Describe the observed pattern / additional red flag(s) (if present) and the mitigation rationale against each of the rules the alert was triggered for.>
+
+There is no evidence of structuring, layering, funnel account activity, or misuse of third-party accounts. No adverse media or negative information was identified for the customer or the business.
+Currently, there are no red flags indicative of potential illicit or suspicious activity. Accordingly, it is recommended that this alert be closed with no further review warranted.

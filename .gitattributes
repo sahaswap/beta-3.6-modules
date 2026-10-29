@@ -1,0 +1,7 @@
+# VBA modules must keep their Windows (CRLF) line endings: the VBA editor
+# can fail to compile a module whose line continuations end in LF only.
+*.bas -text
+*.cls -text
+*.frm -text
+*.frx binary
+*.txt -text
