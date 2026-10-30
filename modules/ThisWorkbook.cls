@@ -6,3 +6,10 @@ Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = True
 Attribute VB_TemplateDerived = False
 Attribute VB_Customizable = True
+Option Explicit
+
+' Fit Sheet1 to this screen (Module2 FitSheet1ToWindow).
+Private Sub Workbook_Open()
+    On Error Resume Next
+    Application.Run "FitSheet1ToWindow"
+End Sub

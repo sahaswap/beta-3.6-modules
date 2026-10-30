@@ -4129,6 +4129,7 @@ Public Sub SetupOsddInputs()
     On Error GoTo 0
 
     Application.EnableEvents = evts
+    FitSheet1ToWindow
     MsgBox "OSDD inputs are set up on Sheet1 (columns V to AB), and Counterparty 6 is hidden." & vbCrLf & vbCrLf & _
         "Fill them in before clicking OSDD Search.", vbInformation, "OSDD Inputs"
     Exit Sub
@@ -4183,6 +4184,34 @@ Public Sub StyleOsddInputs()
 
     If wasProt Then ws.Protect Password:="p7ss"
     Application.EnableEvents = evts
+End Sub
+
+' Zooms Sheet1 so all of it - A2:AB28, the rows below are hidden - fits
+' the Excel window without scrolling. Excel works the percentage out for
+' the screen it is on, so it is run on opening the workbook
+' (ThisWorkbook's Workbook_Open) and after SetupOsddInputs.
+Public Sub FitSheet1ToWindow()
+    Dim ws As Worksheet, keep As String, wasProt As Boolean
+    On Error GoTo Done
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    ThisWorkbook.Activate
+    ws.Activate
+    keep = ActiveCell.Address
+    On Error Resume Next
+    ws.Range("A2:AB28").Select
+    If Err.Number <> 0 Then
+        ' The protection doesn't allow selecting locked cells.
+        Err.Clear
+        wasProt = True
+        ws.Unprotect Password:="p7ss"
+        ws.Range("A2:AB28").Select
+    End If
+    ActiveWindow.Zoom = True
+    ActiveWindow.ScrollRow = 1
+    ActiveWindow.ScrollColumn = 1
+    ws.Range(keep).Select
+    If wasProt Then ws.Protect Password:="p7ss"
+Done:
 End Sub
 
 Private Sub CopyLook(ByVal src As Range, ByVal dst As Range)
