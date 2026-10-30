@@ -128,6 +128,11 @@ Private Const MIN_PDF_SIZE_BYTES As Long = 5120
 ' News (always two): the Operating Manual (4.7) asks for the first two
 ' pages of search-engine results.
 Private Const SEARCH_PAGES As Long = 2
+' Sheet1 rows: the customer, and counterparties 1-5 (row 23, the old
+' Counterparty 6, is hidden - see SetupOsddInputs).
+Private Const CUST_ROW As Long = 13
+Private Const CP_FIRST_ROW As Long = 18
+Private Const CP_LAST_ROW As Long = 22
 
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
@@ -441,13 +446,13 @@ Dim ecmCase As String, AlertID As String
 Dim CustName As String, custAddr As String
 Dim custNameNegNews As String
 Dim cpName As String, cpAddr As String
-Dim cpNameNegNews(18 To 23) As String
+Dim cpNameNegNews(CP_FIRST_ROW To CP_LAST_ROW) As String
 ' Additional addresses, telephones and emails per entity, and the other
 ' parties named in the narrative (see QueueEntitySearches).
 Dim custExtraAddrs As Collection, custPhones As Collection, custEmails As Collection
-Dim cpExtraAddrs(18 To 23) As Collection, cpPhones(18 To 23) As Collection, cpEmails(18 To 23) As Collection
-Dim otherParties As Collection, inputText As String, k As Long
-Dim osddForm As Object, osddFormUsed As Boolean
+Dim cpExtraAddrs(CP_FIRST_ROW To CP_LAST_ROW) As Collection, cpPhones(CP_FIRST_ROW To CP_LAST_ROW) As Collection
+Dim cpEmails(CP_FIRST_ROW To CP_LAST_ROW) As Collection
+Dim otherParties As Collection, k As Long, osddNote As String
 
 Dim baseFileName As String, desktopPath As String
 Dim caseFolderPath As String, mainFolderPath As String
@@ -501,7 +506,7 @@ AlertID = SanitizeFileNamePart(Trim(CStr(ws.Range("J10").Value)))
 CustName = SanitizeFileNamePart(Trim(CStr(ws.Range("J13").Value)))
 custAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("J14").Value)))
 
-If CustName = "" And Application.CountA(ws.Range("J18:J23")) = 0 Then
+If CustName = "" And Application.CountA(ws.Range("J" & CP_FIRST_ROW & ":J" & CP_LAST_ROW)) = 0 Then
 MsgBox "I don't see a Customer Name or any Counterparties to search. " & _
 "Please fill them in first!", vbExclamation, "Nothing to Search"
 Exit Sub
@@ -542,7 +547,7 @@ If Not FSO.FolderExists(caseFolderPath) Then FSO.CreateFolder caseFolderPath
 mainFolderPath = caseFolderPath & "\OSDD Searches"
 If Not FSO.FolderExists(mainFolderPath) Then FSO.CreateFolder mainFolderPath
 
-totalCPs = Application.CountA(ws.Range("J18:J23"))
+totalCPs = Application.CountA(ws.Range("J" & CP_FIRST_ROW & ":J" & CP_LAST_ROW))
 
 ' Ask which search mode to run this batch under (v3.5). Replaces
 ' the old binary non-English Yes/No prompt - Visible mode below
@@ -569,120 +574,34 @@ LogStep "STEP 2: before PrewarmEdgeProfiles"
 PrewarmEdgeProfiles
 LogStep "STEP 2: after PrewarmEdgeProfiles"
 
-' Collect the small bits of input we need from the analyst, per the
-' Operating Manual's external research steps (4.7): the Negative News
-' name without its non-essential elements, any additional addresses,
-' telephone numbers / email addresses, and any other parties named in
-' the narrative.
-' All on one screen (frmOsddInputs, built by BuildFrmOsddInputs) when the
-' workbook has it; otherwise a prompt for each, as before.
-For i = 18 To 23
-Set cpExtraAddrs(i) = New Collection
-Set cpPhones(i) = New Collection
-Set cpEmails(i) = New Collection
-Next i
-osddFormUsed = False
-On Error Resume Next
-Set osddForm = VBA.UserForms.Add("frmOsddInputs")
-On Error GoTo ErrorHandler
-
-If Not osddForm Is Nothing Then
-LogStep "STEP 3: before OSDD inputs form"
-If CustName <> "" Then osddForm.AddRow "C", "Customer: " & CustName, ShortenName(CustName), _
-TransactionAddresses(True, "", custAddr)
-For i = 18 To 23
-cpName = SanitizeFileNamePart(Trim(CStr(ws.Range("J" & i).Value)))
-cpAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("T" & i).Value)))
-If cpName <> "" Then osddForm.AddRow CStr(i), "CP" & (i - 17) & ": " & cpName, ShortenName(cpName), _
-TransactionAddresses(False, cpName, cpAddr)
-Next i
-Application.StatusBar = "OSINT: Waiting for OSDD search inputs..."
-Beep
-ForcePromptToFront
-osddForm.Show
-LogStep "STEP 3: OSDD inputs form closed, cancelled=" & osddForm.Cancelled
-If osddForm.Cancelled Then
-Unload osddForm
-Exit Sub
-End If
+' The analyst's OSDD inputs, per the Operating Manual's external research
+' steps (4.7), are on Sheet1 beside each entity (see SetupOsddInputs): the
+' Negative News name, any additional addresses, telephones / emails, and
+' the other parties named in the narrative.
+osddNote = ""
 If CustName <> "" Then
-custNameNegNews = NormalizeSpaces(osddForm.RowText("C", "Neg"))
-Set custExtraAddrs = SplitList(osddForm.RowAddresses("C"))
-ParseContacts osddForm.RowText("C", "Contact"), custPhones, custEmails
+ReadOsddInputs ws, CUST_ROW, "the Customer (" & CustName & ")", CustName, custAddr, True, _
+custNameNegNews, custExtraAddrs, custPhones, custEmails, osddNote
 End If
-For i = 18 To 23
-cpNameNegNews(i) = NormalizeSpaces(osddForm.RowText(CStr(i), "Neg"))
-Set cpExtraAddrs(i) = SplitList(osddForm.RowAddresses(CStr(i)))
-ParseContacts osddForm.RowText(CStr(i), "Contact"), cpPhones(i), cpEmails(i)
-Next i
-Set otherParties = SplitList(osddForm.OtherPartiesText)
-Unload osddForm
-Set osddForm = Nothing
-osddFormUsed = True
-End If
-
-If Not osddFormUsed Then
-If CustName <> "" Then
-LogStep "STEP 3: before customer negnews InputBox"
-Application.StatusBar = "OSINT: Waiting for Customer Negative News input..."
-Beep
-ForcePromptToFront
-custNameNegNews = InputBox( _
-"Negative News search for the Customer." & vbCrLf & vbCrLf & _
-"Per the procedure, legal extensions (LLC, Inc, Ltd...), middle names or " & _
-"initials and suffixes (Jr, Sr, III) are left out of this search. Check the " & _
-"name below and edit it if needed, or delete it to skip Negative News.", _
-"Customer Negative News", ShortenName(CustName))
-LogStep "STEP 3: customer negnews returned, len=" & Len(custNameNegNews)
-If StrPtr(custNameNegNews) = 0 Then Exit Sub
-custNameNegNews = NormalizeSpaces(custNameNegNews)
-
-If Not AskAdditionalAddresses("the Customer", TransactionAddresses(True, "", custAddr), custExtraAddrs) Then Exit Sub
-If Not AskPhonesAndEmails("the Customer", custPhones, custEmails) Then Exit Sub
-End If
-LogStep "STEP 3: customer prompts complete"
-
-For i = 18 To 23
+For i = CP_FIRST_ROW To CP_LAST_ROW
 cpName = SanitizeFileNamePart(Trim(CStr(ws.Range("J" & i).Value)))
 cpAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("T" & i).Value)))
 Set cpExtraAddrs(i) = New Collection
 Set cpPhones(i) = New Collection
 Set cpEmails(i) = New Collection
 If cpName <> "" Then
-Application.StatusBar = "OSINT: Waiting for CP '" & cpName & "' Negative News input..."
-Beep
-ForcePromptToFront
-cpNameNegNews(i) = InputBox( _
-"Negative News search for this Counterparty." & vbCrLf & vbCrLf & _
-"Per the procedure, legal extensions, middle names or initials and suffixes " & _
-"are left out of this search. Check the name below and edit it if needed, " & _
-"or delete it to skip Negative News.", _
-"Counterparty: " & cpName, ShortenName(cpName))
-If StrPtr(cpNameNegNews(i)) = 0 Then Exit Sub
-cpNameNegNews(i) = NormalizeSpaces(cpNameNegNews(i))
-
-If Not AskAdditionalAddresses("Counterparty " & cpName, TransactionAddresses(False, cpName, cpAddr), cpExtraAddrs(i)) Then Exit Sub
-If Not AskPhonesAndEmails("Counterparty " & cpName, cpPhones(i), cpEmails(i)) Then Exit Sub
+ReadOsddInputs ws, i, "Counterparty " & (i - 17) & " (" & cpName & ")", cpName, cpAddr, False, _
+cpNameNegNews(i), cpExtraAddrs(i), cpPhones(i), cpEmails(i), osddNote
 End If
 Next i
-
-' Anyone else the narrative names and relies on also needs the Name and
-' Negative News searches (Operating Manual 4.7, Negative News).
-Application.StatusBar = "OSINT: Waiting for other parties input..."
-Beep
-ForcePromptToFront
-inputText = InputBox( _
-"Any other individuals or entities named in the Alert Narrative and relied " & _
-"upon (e.g. beneficial owners, directors)?" & vbCrLf & vbCrLf & _
-"Enter their names separated by a semicolon ( ; ), or leave blank for none. " & _
-"Each gets a Name search and a Negative News search.", "Other Parties")
-If StrPtr(inputText) = 0 Then Exit Sub
-Set otherParties = SplitList(inputText)
-End If
+Set otherParties = SplitList(CellStr(ws.Range("V27").Value))
+LogStep "STEP 3: OSDD inputs read from Sheet1"
 
 LogStep "STEP 3: before Starting Searches MsgBox"
 Application.StatusBar = "OSINT: Waiting for Starting-Searches confirmation..."
 TopMostMsgBox _
+IIf(osddNote <> "", "Additional Address? is Yes, but no address was entered on Sheet1 or found " & _
+"in the transaction data for:" & osddNote & vbCrLf & vbCrLf, "") & _
 "I'm going to run the searches now! Please keep your hands off the mouse " & _
 "and keyboard so I don't get interrupted." & vbCrLf & vbCrLf & _
 "(If things go wrong, just hold down the ESC key for 2 seconds to stop me).", _
@@ -714,7 +633,7 @@ End If
 
 ' ---- Counterparty tasks (appended to same queue) ----
 cpLoopPosition = 0
-For i = 18 To 23
+For i = CP_FIRST_ROW To CP_LAST_ROW
 cpName = SanitizeFileNamePart(Trim(CStr(ws.Range("J" & i).Value)))
 cpAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("T" & i).Value)))
 If cpName <> "" Then
@@ -3891,53 +3810,6 @@ Private Sub QueueSearch(ByVal tasks As Collection, ByVal query As String, ByVal 
     Next p
 End Sub
 
-' "Was there any additional address identified for X?" - Yes asks for the
-' address(es), pre-filled with any found in the transaction data. False
-' only if the analyst cancels the address box (the run is stopped, as
-' before).
-Private Function AskAdditionalAddresses(ByVal who As String, ByVal fromTransactions As String, _
-    ByRef addrs As Collection) As Boolean
-    Dim msg As String, resp As Long, s As String
-
-    Set addrs = New Collection
-    msg = "Was there any additional address identified for " & who & "?"
-    If fromTransactions <> "" Then
-        msg = msg & vbCrLf & vbCrLf & "Addresses in the transaction data that differ from the one on Sheet1:" & _
-            vbCrLf & "   " & Replace(fromTransactions, " ; ", vbCrLf & "   ")
-    End If
-    Application.StatusBar = "OSINT: Waiting for additional address decision (" & who & ")..."
-    resp = TopMostMsgBox(msg, "Additional Address", MB_YESNO Or MB_ICONQUESTION Or MB_TOPMOST)
-    If resp = IDYES Then
-        Beep
-        ForcePromptToFront
-        s = InputBox("Enter the additional address(es) for " & who & "." & vbCrLf & vbCrLf & _
-            "Separate several with a semicolon ( ; ). Each gets an Address and a Name + Address search.", _
-            "Additional Address", fromTransactions)
-        If StrPtr(s) = 0 Then Exit Function
-        Set addrs = SplitList(s)
-    End If
-    AskAdditionalAddresses = True
-End Function
-
-' Telephone numbers and email addresses for X, in one box: entries are
-' separated by semicolons; one with an "@" is an email, the rest phones.
-' False only if the analyst cancels (the run is stopped).
-Private Function AskPhonesAndEmails(ByVal who As String, ByRef phones As Collection, _
-    ByRef emails As Collection) As Boolean
-    Dim s As String
-
-    Set phones = New Collection
-    Set emails = New Collection
-    Application.StatusBar = "OSINT: Waiting for telephone / email input (" & who & ")..."
-    Beep
-    ForcePromptToFront
-    s = InputBox("Telephone number(s) or email address(es) for " & who & ", if any." & vbCrLf & vbCrLf & _
-        "Separate several with a semicolon ( ; ). Leave blank if none.", "Telephone / Email")
-    If StrPtr(s) = 0 Then Exit Function
-    ParseContacts s, phones, emails
-    AskPhonesAndEmails = True
-End Function
-
 ' Telephone numbers / email addresses from one box: entries separated by
 ' semicolons; one with an "@" is an email, the rest are phones.
 Private Sub ParseContacts(ByVal s As String, ByRef phones As Collection, ByRef emails As Collection)
@@ -4165,3 +4037,222 @@ Private Function SearchURL(ByVal query As String, ByVal pageNum As Long) As Stri
     SearchURL = "https://www.google.com/search?q=" & URLEncode(query) & "&num=100&hl=en"
     If pageNum > 1 Then SearchURL = SearchURL & "&start=" & ((pageNum - 1) * 10)
 End Function
+
+'==================================================================
+' OSDD INPUTS ON SHEET1
+'
+' Beside each entity's row - the customer on row 13, counterparties 1-5
+' on rows 18-22:
+'   V     Negative News name. Blank = the name without its legal
+'         extension, middle names or suffixes (Operating Manual 4.7).
+'   W     Additional address identified? (Yes / No)
+'   X:Z   up to 3 additional addresses
+'   AA    telephone(s), AB email(s) - several separated by ;
+' and in V27 the other parties named in the narrative and relied upon.
+'
+' Run SetupOsddInputs once to lay them out. Nothing that is already on
+' Sheet1 moves, so Sheet7's tags and every other module's cell
+' references stay as they are. StyleOsddInputs re-colours the new cells
+' to match the current theme (the theme manager calls it after a theme
+' change).
+'==================================================================
+Public Sub SetupOsddInputs()
+    Dim ws As Worksheet, ws7 As Worksheet, sm As Worksheet
+    Dim heads As Variant, widths As Variant, dv As Variant, c As Long, evts As Boolean, f As String
+
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    evts = Application.EnableEvents
+    Application.EnableEvents = False
+    On Error GoTo Fail
+    ws.Unprotect Password:="p7ss"
+
+    ' The tool now takes 5 counterparties: row 23 (Counterparty 6) is
+    ' cleared and hidden.
+    ws.Range("J" & CP_LAST_ROW + 1).MergeArea.ClearContents
+    ws.Range("T" & CP_LAST_ROW + 1).ClearContents
+    ws.Rows(CP_LAST_ROW + 1).Hidden = True
+
+    heads = Array("Negative News Name", "Additional Address?", "Additional Address 1", _
+        "Additional Address 2", "Additional Address 3", "Telephone", "Email")
+    widths = Array(26, 20, 30, 30, 30, 18, 28)
+    ws.Range("V3:AB27").UnMerge
+    ws.Columns("V:AB").Hidden = False
+    For c = 0 To 6
+        ws.Columns(22 + c).ColumnWidth = widths(c)
+        ws.Cells(12, 22 + c).Value = heads(c)
+        ws.Cells(17, 22 + c).Value = heads(c)
+    Next c
+
+    ws.Range("V3:AB4").Merge
+    ws.Range("V3").Value = "OSDD Search Inputs"
+    ws.Range("V5:AB10").Merge
+    ws.Range("V5").Value = _
+        "Fill these in before clicking OSDD Search. Several telephones or emails in one cell: separate with ;" & vbLf & _
+        "Negative News Name: leave blank to search the name without legal extensions (LLC, Inc...), middle " & _
+        "names or suffixes, as the procedure asks - or type the name to use." & vbLf & _
+        "Additional Address?: Yes with no address typed takes up to 3 from the transaction data (run Export " & _
+        "Trx File first) and writes them in. Each address gets an Address and a Name + Address search; each " & _
+        "telephone and email gets its own search." & vbLf & _
+        "Other parties (row 27): anyone else named in the narrative and relied upon (beneficial owners, " & _
+        "directors...) - each gets a Name and a Negative News search."
+    ws.Range("V26:AB26").Merge
+    ws.Range("V26").Value = "Other Parties named in the narrative and relied upon (separate with ;)"
+    ws.Range("V27:AB27").Merge
+
+    For Each dv In Array("W" & CUST_ROW, "W" & CP_FIRST_ROW & ":W" & CP_LAST_ROW)
+        With ws.Range(CStr(dv)).Validation
+            .Delete
+            .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Formula1:="Yes,No"
+            .IgnoreBlank = True
+            .InCellDropdown = True
+        End With
+    Next dv
+
+    StyleOsddInputs
+    ws.Protect Password:="p7ss"
+
+    ' Sheet7's [Counterparties] tag joins J18:J23 - make it the 5 rows.
+    Set ws7 = ThisWorkbook.Sheets("Sheet7")
+    On Error Resume Next
+    ws7.Unprotect Password:="p7ss"
+    f = ws7.Range("K8").Formula
+    If InStr(f, "J18:J23") > 0 Then ws7.Range("K8").Formula = Replace(f, "J18:J23", "J18:J22")
+
+    ' Search Matrix: hide Counterparty 6's block (rows 32-36).
+    Set sm = ThisWorkbook.Sheets("Search Matrix")
+    If InStr(sm.Range("A32").Formula, "$J$23") > 0 Then
+        c = IIf(sm.ProtectContents, 1, 0)
+        If c = 1 Then sm.Unprotect Password:="p7ss"
+        sm.Rows("32:36").Hidden = True
+        If c = 1 Then sm.Protect Password:="p7ss"
+    End If
+    On Error GoTo 0
+
+    Application.EnableEvents = evts
+    MsgBox "OSDD inputs are set up on Sheet1 (columns V to AB), and Counterparty 6 is hidden." & vbCrLf & vbCrLf & _
+        "Fill them in before clicking OSDD Search.", vbInformation, "OSDD Inputs"
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = evts
+    On Error Resume Next
+    ws.Protect Password:="p7ss"
+    MsgBox "Could not set up the OSDD inputs: " & Err.Description, vbExclamation, "OSDD Inputs"
+End Sub
+
+' Gives the new cells the look of the counterparty table next to them in
+' whatever theme is active: headers like T17, input cells like T18, the
+' notes like the G18 label.
+Public Sub StyleOsddInputs()
+    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean
+    Dim heads As Range, inputs As Range
+
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    If CellStr(ws.Range("V17").Value) = "" Then Exit Sub        ' not set up
+    evts = Application.EnableEvents
+    Application.EnableEvents = False
+    wasProt = ws.ProtectContents
+    On Error Resume Next
+    If wasProt Then ws.Unprotect Password:="p7ss"
+
+    Set heads = ws.Range("V12:AB12,V17:AB17,V26:AB26")
+    Set inputs = ws.Range("V" & CUST_ROW & ":AB" & CUST_ROW & ",V" & CP_FIRST_ROW & ":AB" & CP_LAST_ROW & ",V27:AB27")
+
+    CopyLook ws.Range("T17"), ws.Range("V3:AB4")
+    ws.Range("V3").Font.Size = ws.Range("T17").Font.Size + 2
+    ws.Range("V3").HorizontalAlignment = xlCenter
+    ws.Range("V3").VerticalAlignment = xlCenter
+
+    CopyLook ws.Range("G18"), ws.Range("V5:AB10")
+    With ws.Range("V5")
+        .WrapText = True
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlTop
+    End With
+
+    CopyLook ws.Range("T17"), heads
+    heads.WrapText = True
+    heads.HorizontalAlignment = xlCenter
+    heads.VerticalAlignment = xlCenter
+
+    CopyLook ws.Range("T18"), inputs
+    inputs.HorizontalAlignment = xlLeft
+    inputs.VerticalAlignment = xlCenter
+    inputs.Locked = False
+    ws.Range("W" & CUST_ROW & ",W" & CP_FIRST_ROW & ":W" & CP_LAST_ROW).HorizontalAlignment = xlCenter
+
+    If wasProt Then ws.Protect Password:="p7ss"
+    Application.EnableEvents = evts
+End Sub
+
+Private Sub CopyLook(ByVal src As Range, ByVal dst As Range)
+    On Error Resume Next
+    If src.Interior.Pattern = xlNone Then
+        dst.Interior.Pattern = xlNone
+    Else
+        dst.Interior.Pattern = xlSolid
+        dst.Interior.Color = src.Interior.Color
+    End If
+    With dst.Font
+        .Name = src.Font.Name
+        .Size = src.Font.Size
+        .Color = src.Font.Color
+        .Bold = src.Font.Bold
+        .Italic = src.Font.Italic
+    End With
+    CopyEdge src.Borders(xlEdgeTop), dst, xlEdgeTop
+    CopyEdge src.Borders(xlEdgeBottom), dst, xlEdgeBottom
+    CopyEdge src.Borders(xlEdgeLeft), dst, xlEdgeLeft
+    CopyEdge src.Borders(xlEdgeRight), dst, xlEdgeRight
+    CopyEdge src.Borders(xlEdgeBottom), dst, xlInsideHorizontal
+    CopyEdge src.Borders(xlEdgeRight), dst, xlInsideVertical
+End Sub
+
+Private Sub CopyEdge(ByVal b As Border, ByVal dst As Range, ByVal edge As Long)
+    On Error Resume Next
+    If b.LineStyle = xlNone Then
+        dst.Borders(edge).LineStyle = xlNone
+    Else
+        dst.Borders(edge).LineStyle = b.LineStyle
+        dst.Borders(edge).Weight = b.Weight
+        dst.Borders(edge).Color = b.Color
+    End If
+End Sub
+
+' One entity's OSDD inputs from its Sheet1 row (see SetupOsddInputs).
+' "Additional Address?" = Yes with no address typed takes up to 3 from
+' the transaction data and writes them in, so the sheet shows what was
+' searched; if there are none, who is added to note.
+Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal r As Long, ByVal who As String, _
+    ByVal fullName As String, ByVal mainAddr As String, ByVal forCustomer As Boolean, _
+    ByRef negName As String, ByRef addrs As Collection, ByRef phones As Collection, _
+    ByRef emails As Collection, ByRef note As String)
+    Dim typed As String, c As Long, item As Variant, evts As Boolean
+
+    negName = NormalizeSpaces(CellStr(ws.Range("V" & r).Value))
+    If negName = "" Then negName = ShortenName(fullName)
+
+    For c = 0 To 2
+        typed = typed & ";" & CellStr(ws.Range("X" & r).Offset(0, c).Value)
+    Next c
+    Set addrs = New Collection
+    For Each item In SplitList(typed)
+        If AddrKey(CStr(item)) <> AddrKey(mainAddr) Then addrs.Add CStr(item)
+    Next item
+
+    If addrs.count = 0 And UCase$(Trim$(CellStr(ws.Range("W" & r).Value))) = "YES" Then
+        evts = Application.EnableEvents
+        Application.EnableEvents = False
+        On Error Resume Next
+        For Each item In SplitList(TransactionAddresses(forCustomer, IIf(forCustomer, "", fullName), mainAddr))
+            If addrs.count >= 3 Then Exit For
+            ws.Range("X" & r).Offset(0, addrs.count).Value = CStr(item)
+            addrs.Add CStr(item)
+        Next item
+        On Error GoTo 0
+        Application.EnableEvents = evts
+        If addrs.count = 0 Then note = note & vbCrLf & "   " & who
+    End If
+
+    ParseContacts CellStr(ws.Range("AA" & r).Value) & ";" & CellStr(ws.Range("AB" & r).Value), phones, emails
+End Sub

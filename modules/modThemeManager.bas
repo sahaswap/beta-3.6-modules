@@ -272,6 +272,10 @@ Public Sub ApplyThemeByKey(ByVal key As String)
     ' they survive whatever the theme just did.
     NormaliseSheetConventions
 
+    ' Sheet1's OSDD input cells (Module2) take the look of the table
+    ' next to them in the theme just applied.
+    RunList "StyleOsddInputs"
+
     SetActiveTheme key
     SyncPicker key
 
