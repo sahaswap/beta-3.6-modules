@@ -28,6 +28,24 @@ The theme modules (`modTronLegacy`, `modDesert`, `modThemeManager`,
 `modThemeSearchMatrix`, `modThemeDebug`) may sit under other names
 (Module11-17) in a given workbook.
 
+### Themes in Beta 3.6.1
+
+In 3.6.1 the Dark Blue theme is `Module13` and the theme manager is
+`Module15`. The files here are those modules, newer:
+
+- `modTronLegacy` is Module13 with every cell fill set through `PaintCells`
+  (a leftover cross-hatch pattern, such as the greyed Escalation Scenario
+  row, no longer washes the dark fill out), no message box on each theme
+  switch, and the picker at V13.
+- `modThemeManager` is Module15 with the Desert theme registered, the
+  picker at V13 and the call to `StyleOsddInputs` after a theme change.
+- `modDesert` is the Desert theme.
+
+To use them: remove Module13 and Module15, import the three files, run
+**Debug > Compile**, then `BuildThemePicker` once so the dropdown lists
+Desert. The theme files here use LF line endings; convert them to CRLF
+before importing (the VBA editor expects CRLF).
+
 ## Notes
 
 - The `.frm` user forms are here without their `.frx` resource files, so
