@@ -20,8 +20,9 @@ Attribute VB_Name = "modInstallUpdate"
 '     fits Sheet1 to the window on opening
 ' Step 2, Sheet1 - runs by itself once step 1 has finished, so the
 ' replaced modules are really gone:
-'   - the OSDD Search Inputs panel in V3:AB10, the theme picker in V13,
-'     row 23 (the old Counterparty 6) emptied and locked
+'   - the OSDD Search Inputs panel in V3:AB10 and the theme picker in V13,
+'     under copies of the form's own banner shapes; row 23 (the old
+'     Counterparty 6) emptied and locked
 '   - Sheet7's [Counterparties] tag on CP1-5 and [CP 6] emptied; Search
 '     Matrix's Counterparty 6 rows hidden
 '   - the current theme applied again, Sheet1 fitted to the window
@@ -168,7 +169,7 @@ End Function
 Private Function PatchCode(ByVal proj As Object) As String
     Dim comp As Object, cm As Object, i As Long, ln As String, t As String, ind As String
     Dim nPicker As Long, nReset As Long, nResetDone As Long, nNarr As Long, nRenLoop As Long
-    Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long
+    Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long, nNavy As Long
     Dim openNote As String, out As String
 
     For Each comp In proj.VBComponents
@@ -214,6 +215,12 @@ Private Function PatchCode(ByVal proj As Object) As String
                 ElseIf InStr(ln, "enter a number from 0 to 6.") > 0 Then
                     cm.ReplaceLine i, Replace(ln, "0 to 6.", "0 to 5.")
                     nMergeMsg = nMergeMsg + 1
+                ElseIf t = "InStr(1, txt, ""OSDD"", vbTextCompare) > 0 Or _" Then
+                    ' Navy & Gold takes any shape saying OSDD for a button; the
+                    ' OSDD Search Inputs banner is not one.
+                    cm.ReplaceLine i, ind & "(InStr(1, txt, ""OSDD"", vbTextCompare) > 0 And " & _
+                        "InStr(1, txt, ""Inputs"", vbTextCompare) = 0) Or _"
+                    nNavy = nNavy + 1
                 End If
                 i = i + 1
             Loop
@@ -243,6 +250,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nMergeMenu, 1, "PDF Merge: menu without Counterparty 6")
     out = out & Item(nMergeCase, 1, "PDF Merge: Counterparty 6 choice removed")
     out = out & Item(nMergeMsg, 1, "PDF Merge: 'enter a number from 0 to 5'")
+    out = out & Item(nNavy, 1, "Navy & Gold styles the OSDD Search Inputs banner as a banner")
     out = out & "   ThisWorkbook fits Sheet1 on opening: " & openNote & vbCrLf
     PatchCode = out
 End Function
@@ -262,9 +270,23 @@ Public Sub InstallUpdate_Step2()
     Dim ws As Worksheet, ws7 As Worksheet, sm As Worksheet
     Dim labels As Variant, c As Long, f As String, themeList As String, themeVal As String, key As String
     Dim evts As Boolean, wbProt As Boolean, smProt As Boolean, stepName As String
-    Dim pickerErr As String, errNum As Long, errDesc As String
+    Dim pickerErr As String, bannerErr As String, errNum As Long, errDesc As String
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
+
+    ' The theme and the picker's list, then the theme off: the new banners
+    ' are copies of the plain originals, and the theme goes back over all
+    ' of them at the end so they match.
+    On Error Resume Next
+    key = CStr(Application.Run("ActiveTheme"))
+    themeVal = CStr(ws.Range(PICKER_OLD).Value)
+    themeList = ws.Range(PICKER_OLD).Validation.Formula1
+    If themeVal = "" Then themeVal = CStr(ws.Range(PICKER_NEW).Value)
+    If themeList = "" Then themeList = ws.Range(PICKER_NEW).Validation.Formula1
+    If key <> "" And key <> "NONE" Then Application.Run "ApplyThemeByKey", "NONE"
+    On Error GoTo 0
+    If InStr(themeList, "Desert") = 0 Then themeList = "Default (no theme),Dark Blue,Desert,Navy & Gold"
+
     evts = Application.EnableEvents
     Application.EnableEvents = False
     On Error GoTo Fail
@@ -272,15 +294,6 @@ Public Sub InstallUpdate_Step2()
     wbProt = ThisWorkbook.ProtectStructure
     If wbProt Then ThisWorkbook.Unprotect Password:=PWD
     ws.Unprotect Password:=PWD
-
-    ' The theme picker's list and value, from wherever it is now.
-    On Error Resume Next
-    themeVal = CStr(ws.Range(PICKER_OLD).Value)
-    themeList = ws.Range(PICKER_OLD).Validation.Formula1
-    If themeVal = "" Then themeVal = CStr(ws.Range(PICKER_NEW).Value)
-    If themeList = "" Then themeList = ws.Range(PICKER_NEW).Validation.Formula1
-    On Error GoTo Fail
-    If InStr(themeList, "Desert") = 0 Then themeList = "Default (no theme),Dark Blue,Desert,Navy & Gold"
 
     stepName = "clearing the old panel (V3:AB28) and picker (U27:U28)"
     With ws.Range("V3:AB28")
@@ -301,33 +314,42 @@ Public Sub InstallUpdate_Step2()
     ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
 
-    stepName = "building the panel (V3:AB10)"
+    ' The panel: a column-header row like the counterparty table's (row 17)
+    ' and five input rows, rows 5-10 beside the Alert Related Information
+    ' rows.
+    stepName = "building the panel (V5:AB10)"
     ws.Columns("V:AB").Hidden = False
     ws.Columns("V").ColumnWidth = 18
     ws.Columns("W:AB").ColumnWidth = 20
-    ws.Range("V3:AB3").Merge
-    ws.Range("V3").Value = "OSDD Search Inputs"
-    ws.Range("W4").Formula = "=""Customer""&IF($J$13="""","""",CHAR(10)&$J$13)"
+    ws.Range("V5").Value = "Input"
+    ws.Range("W5").Formula = "=""Customer""&IF($J$13="""",""""," & """ - ""&$J$13)"
     For c = 1 To 5
-        ws.Cells(4, 23 + c).Formula = "=""CP " & c & """&IF($J$" & (17 + c) & "="""","""",CHAR(10)&$J$" & (17 + c) & ")"
+        ws.Cells(5, 23 + c).Formula = "=""CP " & c & """&IF($J$" & (17 + c) & "="""",""""," & """ - ""&$J$" & (17 + c) & ")"
     Next c
     labels = Array("Negative News Name", "Additional Address 1", "Additional Address 2", _
-        "Additional Address 3", "Telephone", "Email")
-    For c = 0 To 5
-        ws.Cells(5 + c, 22).Value = labels(c)
+        "Additional Address 3", "Telephone / Email")
+    For c = 0 To 4
+        ws.Cells(6 + c, 22).Value = labels(c)
     Next c
-    InputTip ws.Range("W5:AB5"), "Negative News Name", _
+    InputTip ws.Range("W6:AB6"), "Negative News Name", _
         "Leave blank to search the name without legal extensions (LLC, Inc...), middle names " & _
         "or suffixes, as the procedure asks - or type the name to search."
-    InputTip ws.Range("W6:AB8"), "Additional Address", _
+    InputTip ws.Range("W7:AB9"), "Additional Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
-    InputTip ws.Range("W9:AB10"), "Telephone / Email", _
+    InputTip ws.Range("W10:AB10"), "Telephone / Email", _
         "Each gets its own search. Several? Separate them with ;"
 
     stepName = "moving the theme picker to " & PICKER_NEW
-    ws.Range("V12").Value = "Theme"
     ws.Range(PICKER_NEW).Value = themeVal
     pickerErr = PickerList(ws.Range(PICKER_NEW), themeList)
+
+    ' The banners: copies of the form's own banner shapes, the same height
+    ' and in the same rows, so every theme styles them like the others.
+    stepName = "adding the banners"
+    bannerErr = AddBanner(ws, "Alert Related Information", "Rectangle: Single Corner Snipped OSDD", _
+        "OSDD Search Inputs", "V", "AB")
+    bannerErr = bannerErr & AddBanner(ws, "Customer Information", "Rectangle: Single Corner Snipped Theme", _
+        "Theme", "V", "V")
 
     stepName = "updating Sheet7 and Search Matrix"
     Set ws7 = ThisWorkbook.Sheets("Sheet7")
@@ -348,16 +370,17 @@ Public Sub InstallUpdate_Step2()
     If wbProt Then ThisWorkbook.Protect Password:=PWD, Structure:=True, Windows:=False
     Application.EnableEvents = evts
 
-    ' The current theme again (the new Dark Blue repaints cleanly), which
-    ' also colours the panel; then fit Sheet1 to the window.
-    key = CStr(Application.Run("ActiveTheme"))
-    If key <> "" Then Application.Run "ApplyThemeByKey", key
+    ' The theme back on - over the new banners too - then the panel's cells
+    ' coloured to match and Sheet1 fitted to the window.
+    If key <> "" And key <> "NONE" Then Application.Run "ApplyThemeByKey", key
     Application.Run "StyleOsddInputs"
     Application.Run "FitSheet1ToWindow"
     On Error GoTo 0
 
-    MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB10, theme picker in V13, " & _
-        "row 23 emptied, Sheet7 and Search Matrix on 5 counterparties." & vbCrLf & vbCrLf & _
+    MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB10 and the theme picker " & _
+        "in V13, both under banners like the form's; row 23 emptied; Sheet7 and Search Matrix on 5 " & _
+        "counterparties." & vbCrLf & vbCrLf & _
+        IIf(bannerErr = "", "", "Banners: " & bannerErr & vbCrLf & vbCrLf) & _
         IIf(pickerErr = "", "", "The theme dropdown couldn't be added (" & pickerErr & "). Run " & _
             "BuildThemePicker once to add it." & vbCrLf & vbCrLf) & _
         "Now: Debug > Compile VBAProject, save the workbook, and delete modInstallUpdate.", _
@@ -371,11 +394,55 @@ Fail:
     On Error Resume Next
     ws.Protect Password:=PWD
     If wbProt Then ThisWorkbook.Protect Password:=PWD, Structure:=True, Windows:=False
+    If key <> "" And key <> "NONE" Then Application.Run "ApplyThemeByKey", key
     MsgBox "Sheet1 layout stopped while " & stepName & ":" & vbCrLf & vbCrLf & _
         "Error " & errNum & ": " & errDesc & vbCrLf & vbCrLf & _
         "Run InstallUpdate_Step2 again once that's sorted (it's safe to re-run).", _
         vbExclamation, "Install Update"
 End Sub
+
+' A copy of the banner shape whose text includes srcText, named nm, saying
+' txt, over columns firstCol:lastCol with the same top, height and side
+' inset as the original. Replaces an earlier copy of the same name.
+' Returns "" or what went wrong.
+Private Function AddBanner(ByVal ws As Worksheet, ByVal srcText As String, ByVal nm As String, _
+    ByVal txt As String, ByVal firstCol As String, ByVal lastCol As String) As String
+    Dim src As Shape, shp As Shape, inset As Single
+
+    On Error Resume Next
+    ws.Shapes(nm).Delete
+    Err.Clear
+    Set src = FindShapeByText(ws, srcText)
+    If src Is Nothing Then
+        AddBanner = "no '" & srcText & "' banner to copy. "
+        Exit Function
+    End If
+    inset = src.Left - ws.Range("G1").Left
+    If inset < 0 Then inset = 0
+
+    Set shp = src.Duplicate
+    shp.Name = nm
+    shp.AlternativeText = ""
+    shp.TextFrame2.TextRange.Text = txt
+    shp.Top = src.Top
+    shp.Height = src.Height
+    shp.Left = ws.Range(firstCol & "1").Left + inset
+    shp.Width = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - shp.Left
+    If Err.Number <> 0 Then AddBanner = "'" & txt & "': " & Err.Description & ". "
+End Function
+
+Private Function FindShapeByText(ByVal ws As Worksheet, ByVal txt As String) As Shape
+    Dim shp As Shape
+    On Error Resume Next
+    For Each shp In ws.Shapes
+        If Left$(shp.Name, 32) <> "Rectangle: Single Corner Snipped" Or InStr(shp.Name, "OSDD") + InStr(shp.Name, "Theme") = 0 Then
+            If InStr(1, shp.TextFrame2.TextRange.Text, txt, vbTextCompare) > 0 Then
+                Set FindShapeByText = shp
+                Exit Function
+            End If
+        End If
+    Next shp
+End Function
 
 ' Puts the theme list on the picker cell; "" if it worked, otherwise why
 ' not. Tried a second time with Sheet1 active and the cell selected.

@@ -136,10 +136,9 @@ Private Const CP_LAST_ROW As Long = 22
 ' The OSDD inputs panel on Sheet1 (see StyleOsddInputs): the customer's
 ' column, then counterparties 1-5; and its rows.
 Private Const OSDD_CUST_COL As Long = 23             ' W
-Private Const OSDD_ROW_NEG As Long = 5
-Private Const OSDD_ROW_ADDR As Long = 6              ' 6 to 8
-Private Const OSDD_ROW_PHONE As Long = 9
-Private Const OSDD_ROW_EMAIL As Long = 10
+Private Const OSDD_ROW_NEG As Long = 6
+Private Const OSDD_ROW_ADDR As Long = 7              ' 7 to 9
+Private Const OSDD_ROW_CONTACT As Long = 10          ' telephones / emails
 
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
@@ -3962,54 +3961,49 @@ End Function
 '==================================================================
 ' OSDD INPUTS ON SHEET1
 '
-' A panel to the right of the form (laid out once by modSheet1Setup):
-' one column per entity - the customer in W, counterparties 1-5 in X:AB,
-' named in row 4 - and one row per input:
-'   5     Negative News name. Blank = the name without its legal
+' A panel to the right of the form, laid out by modInstallUpdate in the
+' form's own style: a banner (a copy of the "Alert Related Information"
+' banner shape), a column-header row naming the entities - the customer
+' in W, counterparties 1-5 in X:AB - and one row per input:
+'   6     Negative News name. Blank = the name without its legal
 '         extension, middle names or suffixes (Operating Manual 4.7).
-'   6-8   up to 3 additional addresses
-'   9     telephone(s), 10 email(s) - several separated by ;
-' The theme picker is V13. Row 23 (the old Counterparty 6) is empty and
-' locked.
+'   7-9   up to 3 additional addresses
+'   10    telephone(s) / email(s) - several separated by ;
+' Below it, the theme picker in V13 under its own banner. Row 23 (the
+' old Counterparty 6) is empty and locked.
 '==================================================================
 
-' Gives the panel the look of the form beside it in whatever theme is
-' active: its banners like the "Alert Related Information" banner, the
-' entity row like the T17 column header, labels like G5, inputs like T18.
+' Gives the panel's cells the look of the counterparty table in whatever
+' theme is active: the header row like row 17, labels like G18, inputs
+' like T18. (The banners are shapes, so the theme styles those itself.)
 ' The theme manager calls this after every theme change.
 Public Sub StyleOsddInputs()
-    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean, banner As Shape
+    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
-    If CellStr(ws.Range("V5").Value) <> "Negative News Name" Then Exit Sub      ' not set up
+    If CellStr(ws.Range("V6").Value) <> "Negative News Name" Then Exit Sub      ' not set up
     evts = Application.EnableEvents
     Application.EnableEvents = False
     wasProt = ws.ProtectContents
     On Error Resume Next
     If wasProt Then ws.Unprotect Password:="p7ss"
 
-    Set banner = FindShapeByText(ws, "Alert Related Information")
-    If banner Is Nothing Then
-        CopyLook ws.Range("T17"), ws.Range("V3:AB3,V12")
-    Else
-        ShapeLook banner, ws.Range("V3:AB3")
-        ShapeLook banner, ws.Range("V12")
-    End If
+    CopyLook ws.Range("T17"), ws.Range("V5:AB5")
+    With ws.Range("V5:AB5")
+        .HorizontalAlignment = ws.Range("T17").HorizontalAlignment
+        .VerticalAlignment = ws.Range("T17").VerticalAlignment
+        .WrapText = False
+        .ShrinkToFit = True
+    End With
 
-    CopyLook ws.Range("T17"), ws.Range("V4:AB4")
-    ws.Range("V4:AB4").WrapText = True
-    ws.Range("V4:AB4").HorizontalAlignment = xlCenter
-    ws.Range("V4:AB4").VerticalAlignment = xlCenter
+    CopyLook ws.Range("G18"), ws.Range("V6:V10")
+    ws.Range("V6:V10").HorizontalAlignment = ws.Range("G18").HorizontalAlignment
+    ws.Range("V6:V10").VerticalAlignment = ws.Range("G18").VerticalAlignment
 
-    CopyLook ws.Range("G5"), ws.Range("V5:V10")
-    ws.Range("V5:V10").HorizontalAlignment = ws.Range("G5").HorizontalAlignment
-    ws.Range("V5:V10").VerticalAlignment = xlCenter
-
-    CopyLook ws.Range("T18"), ws.Range("W5:AB10,V13")
-    ws.Range("W5:AB10").HorizontalAlignment = xlLeft
-    ws.Range("W5:AB10,V13").VerticalAlignment = xlCenter
-    ws.Range("V13").HorizontalAlignment = xlCenter
-    ws.Range("W5:AB10,V13").Locked = False
+    CopyLook ws.Range("T18"), ws.Range("W6:AB10,V13")
+    ws.Range("W6:AB10,V13").HorizontalAlignment = ws.Range("T18").HorizontalAlignment
+    ws.Range("W6:AB10,V13").VerticalAlignment = ws.Range("T18").VerticalAlignment
+    ws.Range("W6:AB10,V13").Locked = False
     ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
 
@@ -4043,49 +4037,6 @@ Public Sub FitSheet1ToWindow()
     ws.Range(keep).Select
     If wasProt Then ws.Protect Password:="p7ss"
 Done:
-End Sub
-
-Private Function FindShapeByText(ByVal ws As Worksheet, ByVal txt As String) As Shape
-    Dim shp As Shape
-    On Error Resume Next
-    For Each shp In ws.Shapes
-        If shp.HasTextFrame Then
-            If InStr(1, shp.TextFrame2.TextRange.Text, txt, vbTextCompare) > 0 Then
-                Set FindShapeByText = shp
-                Exit Function
-            End If
-        End If
-    Next shp
-End Function
-
-' A banner shape's fill, outline and text colours on cells.
-Private Sub ShapeLook(ByVal shp As Shape, ByVal dst As Range)
-    Dim e As Variant
-    On Error Resume Next
-    If shp.Fill.Visible = msoFalse Then
-        dst.Interior.Pattern = xlNone
-    Else
-        dst.Interior.Pattern = xlSolid
-        dst.Interior.Color = shp.Fill.ForeColor.RGB
-    End If
-    With shp.TextFrame2.TextRange.Font
-        dst.Font.Name = .Name
-        dst.Font.Size = .Size
-        dst.Font.Bold = (.Bold = msoTrue)
-        dst.Font.Italic = False
-        dst.Font.Color = .Fill.ForeColor.RGB
-    End With
-    For Each e In Array(xlEdgeTop, xlEdgeBottom, xlEdgeLeft, xlEdgeRight)
-        If shp.Line.Visible = msoFalse Then
-            dst.Borders(e).LineStyle = xlNone
-        Else
-            dst.Borders(e).LineStyle = xlContinuous
-            dst.Borders(e).Weight = xlThin
-            dst.Borders(e).Color = shp.Line.ForeColor.RGB
-        End If
-    Next e
-    dst.HorizontalAlignment = xlCenter
-    dst.VerticalAlignment = xlCenter
 End Sub
 
 Private Sub CopyLook(ByVal src As Range, ByVal dst As Range)
@@ -4140,6 +4091,5 @@ Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal col As Long, ByVal fullN
         If AddrKey(CStr(item)) <> AddrKey(mainAddr) Then addrs.Add CStr(item)
     Next item
 
-    ParseContacts CellStr(ws.Cells(OSDD_ROW_PHONE, col).Value) & ";" & _
-        CellStr(ws.Cells(OSDD_ROW_EMAIL, col).Value), phones, emails
+    ParseContacts CellStr(ws.Cells(OSDD_ROW_CONTACT, col).Value), phones, emails
 End Sub

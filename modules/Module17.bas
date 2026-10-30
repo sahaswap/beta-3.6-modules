@@ -295,7 +295,7 @@ Private Function ShapeKind(ByVal shp As Shape) As String
     
     If InStr(1, txt, "Start", vbTextCompare) > 0 Or _
        InStr(1, txt, "Export", vbTextCompare) > 0 Or _
-       InStr(1, txt, "OSDD", vbTextCompare) > 0 Or _
+       (InStr(1, txt, "OSDD", vbTextCompare) > 0 And InStr(1, txt, "Inputs", vbTextCompare) = 0) Or _
        InStr(1, txt, "Narrat", vbTextCompare) > 0 Or _
        InStr(1, txt, "Rename", vbTextCompare) > 0 Or _
        InStr(1, txt, "PDF", vbTextCompare) > 0 Or _
