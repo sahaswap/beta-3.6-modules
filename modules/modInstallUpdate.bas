@@ -40,7 +40,8 @@ Private Const RESET_LINE As String = _
 '------------------------------------------------------------------
 Sub InstallUpdate()
     Dim proj As Object, comp As Object, folder As String, bakDir As String
-    Dim files As Variant, names As Variant, f As Variant, i As Long, n As Long
+    Dim files As Variant, names As Variant, marks As Variant, copies(0 To 3) As String
+    Dim f As Variant, i As Long, n As Long
     Dim problem As String, removeList As New Collection, log As String, code As String
 
     On Error Resume Next
@@ -54,8 +55,9 @@ Sub InstallUpdate()
     End If
     On Error GoTo Fail
 
-    ' The folder with the new files, and a check that each one is the
-    ' right module with Windows line endings.
+    ' The folder with the new files. Each one is checked to be the right
+    ' module and imported from a clean copy (see PrepareFile), so it does
+    ' not matter where it was downloaded from.
     With Application.FileDialog(4)                    ' msoFileDialogFolderPicker
         .Title = "Folder with Module2.bas, modTronLegacy.bas, modThemeManager.bas, modDesert.bas"
         .InitialFileName = Environ$("USERPROFILE") & "\Downloads\"
@@ -65,8 +67,9 @@ Sub InstallUpdate()
     If Right$(folder, 1) <> "\" Then folder = folder & "\"
     files = Array("Module2.bas", "modTronLegacy.bas", "modThemeManager.bas", "modDesert.bas")
     names = Array("Module2", "modTronLegacy", "modThemeManager", "modDesert")
+    marks = Array("Sub SearchAndSavePDF_Direct(", "Sub ApplyTronLegacy(", "Sub ApplyThemeByKey(", "Sub ApplyDesert(")
     For i = 0 To UBound(files)
-        problem = problem & CheckFile(folder & files(i), CStr(names(i)))
+        copies(i) = PrepareFile(folder & files(i), CStr(names(i)), CStr(marks(i)), problem)
     Next i
     If problem <> "" Then
         MsgBox "Nothing was changed - fix these first:" & vbCrLf & problem, vbExclamation, "Install Update"
@@ -105,7 +108,7 @@ Sub InstallUpdate()
     Next comp
 
     For i = 0 To UBound(files)
-        Set comp = proj.VBComponents.Import(folder & files(i))
+        Set comp = proj.VBComponents.Import(copies(i))
         log = log & "   imported " & comp.Name & vbCrLf
     Next i
 
@@ -124,23 +127,41 @@ Fail:
         "Done so far:" & vbCrLf & log, vbExclamation, "Install Update"
 End Sub
 
-' "" if path is the module name with Windows (CRLF) line endings,
-' otherwise what is wrong.
-Private Function CheckFile(ByVal path As String, ByVal modName As String) As String
-    Dim fh As Integer, first As String
+' A clean copy of a module file to import, in the TEMP folder: Windows
+' (CRLF) line endings - the VBA editor needs them - with its
+' Attribute VB_Name line first and no byte-order mark. mark is a line
+' only that module has. Returns the copy's path, or "" with the reason
+' added to problem.
+Private Function PrepareFile(ByVal path As String, ByVal modName As String, ByVal mark As String, _
+    ByRef problem As String) As String
+    Dim fh As Integer, s As String, outPath As String
+
     If Dir$(path) = "" Then
-        CheckFile = "   " & Mid$(path, InStrRev(path, "\") + 1) & " is not in the folder" & vbCrLf
+        problem = problem & "   " & modName & ".bas is not in the folder" & vbCrLf
         Exit Function
     End If
     fh = FreeFile
-    Open path For Input As #fh
-    Line Input #fh, first
+    Open path For Binary Access Read As #fh
+    s = Space$(LOF(fh))
+    Get #fh, , s
     Close #fh
-    If Len(first) > 200 Then
-        CheckFile = "   " & modName & ".bas has Unix (LF) line endings - use the copy sent for import" & vbCrLf
-    ElseIf first <> "Attribute VB_Name = """ & modName & """" Then
-        CheckFile = "   " & modName & ".bas is not the " & modName & " module" & vbCrLf
+
+    If Left$(s, 3) = Chr$(239) & Chr$(187) & Chr$(191) Then s = Mid$(s, 4)
+    If InStr(s, mark) = 0 Then
+        problem = problem & "   " & modName & ".bas is not the " & modName & " module" & vbCrLf
+        Exit Function
     End If
+    s = Replace(Replace(Replace(s, vbCrLf, vbLf), vbCr, vbLf), vbLf, vbCrLf)
+    If Left$(s, 17) = "Attribute VB_Name" Then s = Mid$(s, InStr(s, vbCrLf) + 2)
+    s = "Attribute VB_Name = """ & modName & """" & vbCrLf & s
+
+    outPath = Environ$("TEMP") & "\" & modName & ".bas"
+    If Dir$(outPath) <> "" Then Kill outPath
+    fh = FreeFile
+    Open outPath For Binary Access Write As #fh
+    Put #fh, , s
+    Close #fh
+    PrepareFile = outPath
 End Function
 
 ' The single-line changes, in whichever module holds each line.

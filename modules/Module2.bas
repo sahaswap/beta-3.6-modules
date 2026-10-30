@@ -1,3 +1,4 @@
+Attribute VB_Name = "Module2"
 '==================================================================
 ' OSINT Automation Tool
 '

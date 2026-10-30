@@ -43,12 +43,11 @@ In 3.6.1 the Dark Blue theme is `Module13` and the theme manager is
 
 To use them: remove Module13 and Module15, import the three files, run
 **Debug > Compile**, then `BuildThemePicker` once so the dropdown lists
-Desert. The theme files here use LF line endings; convert them to CRLF
-before importing (the VBA editor expects CRLF).
+Desert. Or let `modInstallUpdate` do all of it.
 
 ## Notes
 
 - The `.frm` user forms are here without their `.frx` resource files, so
   they are for reading and comparing; re-importing a form needs its `.frx`.
-- Files are stored byte for byte as exported (see `.gitattributes`). Most use Windows
-  (CRLF) line endings; the theme modules and `Module19.bas` use LF.
+- Files are stored byte for byte (see `.gitattributes`), all with Windows (CRLF)
+  line endings - the VBA editor needs them to import a module.
