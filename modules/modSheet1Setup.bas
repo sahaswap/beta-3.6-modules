@@ -28,12 +28,13 @@ Private Const PICKER_NEW As String = "V13"
 Sub SetupSheet1()
     Dim ws As Worksheet, ws7 As Worksheet, sm As Worksheet
     Dim labels As Variant, c As Long, f As String, themeList As String, themeVal As String
-    Dim evts As Boolean, smProt As Boolean
+    Dim evts As Boolean, smProt As Boolean, stepName As String, errNum As Long, errDesc As String
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
     evts = Application.EnableEvents
     Application.EnableEvents = False
     On Error GoTo Fail
+    stepName = "unprotecting Sheet1"
     ws.Unprotect Password:="p7ss"
 
     ' The theme picker's list and value, from wherever it is now.
@@ -47,6 +48,7 @@ Sub SetupSheet1()
 
     ' Clear the old panel and the old picker; give them the plain sheet
     ' background (U26's) until the panel is styled.
+    stepName = "clearing the old panel (V3:AB28) and picker (U27:U28)"
     With ws.Range("V3:AB28")
         .UnMerge
         .Validation.Delete
@@ -57,6 +59,7 @@ Sub SetupSheet1()
     PlainLook ws.Range("V3:AB28,U27:U28"), ws.Range("U26")
 
     ' Row 23: Counterparty 6 becomes Other Parties.
+    stepName = "turning row 23 into Other Parties"
     ws.Rows(23).Hidden = False
     ws.Range("G23").Value = "Other Parties"
     ws.Range("J23").MergeArea.ClearContents
@@ -66,6 +69,7 @@ Sub SetupSheet1()
         "Separate names with ;. Each gets a Name and a Negative News search."
 
     ' The panel.
+    stepName = "building the panel (V3:AB10)"
     ws.Columns("V:AB").Hidden = False
     ws.Columns("V").ColumnWidth = 18
     ws.Columns("W:AB").ColumnWidth = 20
@@ -89,6 +93,7 @@ Sub SetupSheet1()
         "Each gets its own search. Several? Separate them with ;"
 
     ' The theme picker.
+    stepName = "moving the theme picker to " & PICKER_NEW
     ws.Range("V12").Value = "Theme"
     With ws.Range(PICKER_NEW).Validation
         .Delete
@@ -97,8 +102,11 @@ Sub SetupSheet1()
     End With
     ws.Range(PICKER_NEW).Value = themeVal
 
+    stepName = "colouring the panel (Module2 StyleOsddInputs)"
     StyleOsddInputs
+    stepName = "protecting Sheet1"
     ws.Protect Password:="p7ss"
+    stepName = "fitting Sheet1 to the window"
     FitSheet1ToWindow
 
     ' Sheet7: [Counterparties] joins CP1-5 only; [CP 6] is no more.
@@ -125,10 +133,14 @@ Sub SetupSheet1()
     Exit Sub
 
 Fail:
+    ' Keep the error before On Error Resume Next clears it.
+    errNum = Err.Number: errDesc = Err.Description
     Application.EnableEvents = evts
     On Error Resume Next
     ws.Protect Password:="p7ss"
-    MsgBox "Sheet1 setup stopped: " & Err.Description, vbExclamation, "Sheet1 Setup"
+    MsgBox "Sheet1 setup stopped while " & stepName & ":" & vbCrLf & vbCrLf & _
+        "Error " & errNum & ": " & errDesc & vbCrLf & vbCrLf & _
+        "It's safe to run SetupSheet1 again once that's sorted.", vbExclamation, "Sheet1 Setup"
 End Sub
 
 ' The code changes that go with the new layout, made in whichever module
