@@ -124,6 +124,11 @@ Private Const WM_GETTEXTLENGTH As Long = &HE
 Private Const TOOL_VERSION As String = "3.5"
 Private Const MIN_PDF_SIZE_BYTES As Long = 5120
 
+' Pages of Google results saved for each OSDD search other than Negative
+' News (always two): the Operating Manual (4.7) asks for the first two
+' pages of search-engine results.
+Private Const SEARCH_PAGES As Long = 2
+
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
 ' single constant drives EVERY CAPTCHA decision in the module: the retry
@@ -434,13 +439,14 @@ Dim wasAlreadyOpen As Boolean, headersOK As Boolean
 
 Dim ecmCase As String, AlertID As String
 Dim CustName As String, custAddr As String
-Dim custNameNegNews As String, custNameNegNewsNoMiddle As String
-Dim custNameNegNewsNoLegal As String       ' negnews name minus a legal suffix (LLC/Inc/Ltd/...)
-Dim additionalCustAddr As String
+Dim custNameNegNews As String
 Dim cpName As String, cpAddr As String
 Dim cpNameNegNews(18 To 23) As String
-Dim cpNameNegNewsNoMiddle(18 To 23) As String
-Dim cpNameNegNewsNoLegal(18 To 23) As String
+' Additional addresses, telephones and emails per entity, and the other
+' parties named in the narrative (see QueueEntitySearches).
+Dim custExtraAddrs As Collection, custPhones As Collection, custEmails As Collection
+Dim cpExtraAddrs(18 To 23) As Collection, cpPhones(18 To 23) As Collection, cpEmails(18 To 23) As Collection
+Dim otherParties As Collection, inputText As String, k As Long
 
 Dim baseFileName As String, desktopPath As String
 Dim caseFolderPath As String, mainFolderPath As String
@@ -452,8 +458,6 @@ Dim StartTime As Date
 Dim ElapsedSeconds As Long, Minutes As Long, Seconds As Long
 Dim timeString As String
 
-Dim nameParts() As String
-Dim addAddrResponse As VbMsgBoxResult
 
 Dim expectedHeaders As Variant, headerMsg As String
 Dim spSyncStatus As String      ' "OK" / "FAILED: ..." / "SKIPPED"
@@ -463,8 +467,10 @@ Dim allTasks As Collection
 ' INITIALIZATION
 '--------------------------------------------------------------
 bAbort = False
-additionalCustAddr = ""
-custNameNegNewsNoMiddle = ""
+Set custExtraAddrs = New Collection
+Set custPhones = New Collection
+Set custEmails = New Collection
+Set otherParties = New Collection
 wasAlreadyOpen = False
 totalCPs = 0
 spSyncStatus = "SKIPPED"
@@ -562,148 +568,67 @@ LogStep "STEP 2: before PrewarmEdgeProfiles"
 PrewarmEdgeProfiles
 LogStep "STEP 2: after PrewarmEdgeProfiles"
 
-' Collect the small bits of input we need from the analyst:
-' negative-news variants and any extra addresses.
+' Collect the small bits of input we need from the analyst, per the
+' Operating Manual's external research steps (4.7): the Negative News
+' name without its non-essential elements, any additional addresses,
+' telephone numbers / email addresses, and any other parties named in
+' the narrative.
 If CustName <> "" Then
 LogStep "STEP 3: before customer negnews InputBox"
 Application.StatusBar = "OSINT: Waiting for Customer Negative News input..."
 Beep
 ForcePromptToFront
 custNameNegNews = InputBox( _
-"Do you want to run a Negative News search for the Customer? " & _
-"You can edit the name below, or delete it completely to skip.", _
-"Customer Negative News", CustName)
+"Negative News search for the Customer." & vbCrLf & vbCrLf & _
+"Per the procedure, legal extensions (LLC, Inc, Ltd...), middle names or " & _
+"initials and suffixes (Jr, Sr, III) are left out of this search. Check the " & _
+"name below and edit it if needed, or delete it to skip Negative News.", _
+"Customer Negative News", ShortenName(CustName))
 LogStep "STEP 3: customer negnews returned, len=" & Len(custNameNegNews)
 If StrPtr(custNameNegNews) = 0 Then Exit Sub
-
-' Collapse runs of spaces so "John  Smith" doesn't look like a middle-name case.
 custNameNegNews = NormalizeSpaces(custNameNegNews)
-LogStep "STEP 3: after NormalizeSpaces, len=" & Len(custNameNegNews)
 
-If Trim(custNameNegNews) <> "" Then
-' An entity (legal suffix present) is NOT an individual, so it gets the
-' legal-extension variant and NO middle-name search. An individual gets
-' the middle-name variant instead. The two are mutually exclusive.
-Dim custStripLegal As String
-custStripLegal = StripLegalExtension(custNameNegNews)
-Dim custIsEntity As Boolean
-custIsEntity = (custStripLegal <> "" And StrComp(custStripLegal, custNameNegNews, vbTextCompare) <> 0)
-
-If custIsEntity Then
-' ---- ENTITY: extra Negative News WITHOUT the legal extension ----
-LogStep "STEP 3: before customer legal-extension InputBox"
-Application.StatusBar = "OSINT: Waiting for Legal Extension confirmation..."
-Beep
-ForcePromptToFront
-custNameNegNewsNoLegal = InputBox( _
-"This name looks like it has a legal extension (" & custNameNegNews & ")." & _
-vbCrLf & vbCrLf & "To ALSO run a Negative News search WITHOUT the legal " & _
-"extension, confirm/edit the base name below." & vbCrLf & _
-"(Clear the text or click Cancel to skip this extra search)", _
-"Legal Extension Detected", custStripLegal)
-If StrPtr(custNameNegNewsNoLegal) = 0 Then custNameNegNewsNoLegal = ""
-custNameNegNewsNoLegal = NormalizeSpaces(custNameNegNewsNoLegal)
-Else
-' ---- INDIVIDUAL: extra Negative News WITHOUT the middle name ----
-nameParts = Split(Trim(custNameNegNews), " ")
-LogStep "STEP 3: Split into " & (UBound(nameParts) + 1) & " parts"
-If UBound(nameParts) >= 2 Then
-custNameNegNewsNoMiddle = nameParts(0) & " " & nameParts(UBound(nameParts))
-LogStep "STEP 3: before middle-name InputBox"
-Application.StatusBar = "OSINT: Waiting for Middle Name confirmation..."
-Beep
-ForcePromptToFront
-custNameNegNewsNoMiddle = InputBox( _
-"I noticed the customer might have a middle name (" & custNameNegNews & ")." & _
-vbCrLf & vbCrLf & "If you want to run an additional search WITHOUT the middle " & _
-"name, you can edit/confirm the name below." & vbCrLf & _
-"(Clear the text or click Cancel to skip this extra search)", _
-"Middle Name Detected", custNameNegNewsNoMiddle)
-LogStep "STEP 3: middle-name InputBox returned"
-If StrPtr(custNameNegNewsNoMiddle) = 0 Then custNameNegNewsNoMiddle = ""
-custNameNegNewsNoMiddle = NormalizeSpaces(custNameNegNewsNoMiddle)
-End If
-End If
-End If
-
-LogStep "STEP 3: before Sigma address MsgBox"
-Application.StatusBar = "OSINT: Waiting for Sigma Address decision..."
-Dim sigmaResp As Long
-sigmaResp = TopMostMsgBox( _
-"Did you identify any additional addresses for the Customer via Sigma?", _
-"Sigma Address Check", MB_YESNO Or MB_ICONQUESTION Or MB_TOPMOST)
-LogStep "STEP 3: Sigma TopMostMsgBox returned " & sigmaResp
-If sigmaResp = IDYES Then
-LogStep "STEP 3: before additional-address InputBox"
-Beep
-ForcePromptToFront
-additionalCustAddr = InputBox( _
-"Please paste the additional address identified via Sigma below:", _
-"Enter Additional Address")
-LogStep "STEP 3: additional-address returned"
-If StrPtr(additionalCustAddr) = 0 Then Exit Sub
-additionalCustAddr = NormalizeSpaces(additionalCustAddr)
-End If
+If Not AskAdditionalAddresses("the Customer", TransactionAddresses(True, "", custAddr), custExtraAddrs) Then Exit Sub
+If Not AskPhonesAndEmails("the Customer", custPhones, custEmails) Then Exit Sub
 End If
 LogStep "STEP 3: customer prompts complete"
 
 For i = 18 To 23
 cpName = SanitizeFileNamePart(Trim(CStr(ws.Range("J" & i).Value)))
+cpAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("T" & i).Value)))
+Set cpExtraAddrs(i) = New Collection
+Set cpPhones(i) = New Collection
+Set cpEmails(i) = New Collection
 If cpName <> "" Then
 Application.StatusBar = "OSINT: Waiting for CP '" & cpName & "' Negative News input..."
 Beep
 ForcePromptToFront
 cpNameNegNews(i) = InputBox( _
-"Do you want to run a Negative News search for this Counterparty? " & _
-"You can edit the name or clear it to skip.", _
-"Counterparty: " & cpName, cpName)
+"Negative News search for this Counterparty." & vbCrLf & vbCrLf & _
+"Per the procedure, legal extensions, middle names or initials and suffixes " & _
+"are left out of this search. Check the name below and edit it if needed, " & _
+"or delete it to skip Negative News.", _
+"Counterparty: " & cpName, ShortenName(cpName))
 If StrPtr(cpNameNegNews(i)) = 0 Then Exit Sub
 cpNameNegNews(i) = NormalizeSpaces(cpNameNegNews(i))
 
-If Trim(cpNameNegNews(i)) <> "" Then
-' Entity -> legal-extension variant, NO middle-name search.
-' Individual -> middle-name variant. Mutually exclusive.
-Dim cpStripLegal As String
-cpStripLegal = StripLegalExtension(cpNameNegNews(i))
-Dim cpIsEntity As Boolean
-cpIsEntity = (cpStripLegal <> "" And StrComp(cpStripLegal, cpNameNegNews(i), vbTextCompare) <> 0)
-
-If cpIsEntity Then
-' ---- ENTITY: extra Negative News WITHOUT the legal extension ----
-Application.StatusBar = "OSINT: Waiting for CP '" & cpName & "' Legal Extension confirmation..."
-Beep
-ForcePromptToFront
-cpNameNegNewsNoLegal(i) = InputBox( _
-"This counterparty name looks like it has a legal extension (" & _
-cpNameNegNews(i) & ")." & vbCrLf & vbCrLf & _
-"To ALSO run a Negative News search WITHOUT the legal extension, " & _
-"confirm/edit the base name below." & vbCrLf & _
-"(Clear the text or click Cancel to skip this extra search)", _
-"Legal Extension Detected", cpStripLegal)
-If StrPtr(cpNameNegNewsNoLegal(i)) = 0 Then cpNameNegNewsNoLegal(i) = ""
-cpNameNegNewsNoLegal(i) = NormalizeSpaces(cpNameNegNewsNoLegal(i))
-Else
-' ---- INDIVIDUAL: extra Negative News WITHOUT the middle name ----
-nameParts = Split(Trim(cpNameNegNews(i)), " ")
-If UBound(nameParts) >= 2 Then
-cpNameNegNewsNoMiddle(i) = nameParts(0) & " " & nameParts(UBound(nameParts))
-Application.StatusBar = "OSINT: Waiting for CP '" & cpName & "' Middle Name confirmation..."
-Beep
-ForcePromptToFront
-cpNameNegNewsNoMiddle(i) = InputBox( _
-"I noticed the counterparty might have a middle name (" & _
-cpNameNegNews(i) & ")." & vbCrLf & vbCrLf & _
-"If you want to run an additional search WITHOUT the middle name, " & _
-"you can edit/confirm the name below." & vbCrLf & _
-"(Clear the text or click Cancel to skip this extra search)", _
-"Middle Name Detected", cpNameNegNewsNoMiddle(i))
-If StrPtr(cpNameNegNewsNoMiddle(i)) = 0 Then cpNameNegNewsNoMiddle(i) = ""
-cpNameNegNewsNoMiddle(i) = NormalizeSpaces(cpNameNegNewsNoMiddle(i))
-End If
-End If
-End If
+If Not AskAdditionalAddresses("Counterparty " & cpName, TransactionAddresses(False, cpName, cpAddr), cpExtraAddrs(i)) Then Exit Sub
+If Not AskPhonesAndEmails("Counterparty " & cpName, cpPhones(i), cpEmails(i)) Then Exit Sub
 End If
 Next i
+
+' Anyone else the narrative names and relies on also needs the Name and
+' Negative News searches (Operating Manual 4.7, Negative News).
+Application.StatusBar = "OSINT: Waiting for other parties input..."
+Beep
+ForcePromptToFront
+inputText = InputBox( _
+"Any other individuals or entities named in the Alert Narrative and relied " & _
+"upon (e.g. beneficial owners, directors)?" & vbCrLf & vbCrLf & _
+"Enter their names separated by a semicolon ( ; ), or leave blank for none. " & _
+"Each gets a Name search and a Negative News search.", "Other Parties")
+If StrPtr(inputText) = 0 Then Exit Sub
+Set otherParties = SplitList(inputText)
 
 LogStep "STEP 3: before Starting Searches MsgBox"
 Application.StatusBar = "OSINT: Waiting for Starting-Searches confirmation..."
@@ -720,78 +645,21 @@ If Not CheckDiskSpace() Then Exit Sub
 
 AutoPrepareRuntime
 StartTime = Now
-LogStep "SEARCH PHASE start - total entities to process: " & (IIf(CustName <> "", 1, 0) + totalCPs)
+LogStep "SEARCH PHASE start - total entities to process: " & _
+(IIf(CustName <> "", 1, 0) + totalCPs + otherParties.count)
 
-' Build one flat queue for the customer + every counterparty.
-' Keeping all tasks in a single pool means the workers never sit
-' idle waiting for the next entity's batch to start.
+' Build one flat queue for the customer + every counterparty + other
+' parties. Keeping all tasks in a single pool means the workers never sit
+' idle waiting for the next entity's batch to start. See
+' QueueEntitySearches for the searches each one gets.
 Set allTasks = New Collection
 Application.StatusBar = "OSINT: Queueing searches..."
 
 ' ---- Customer tasks ----
 If CustName <> "" Then
 custLabel = "Customer (" & CustName & ")"
-fileCounter = 1
-
-allTasks.Add Array(CustName, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Google.pdf", _
-1, "Google name", custLabel)
-fileCounter = fileCounter + 1
-
-If custAddr <> "" Then
-allTasks.Add Array(custAddr, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Address.pdf", _
-1, "Address", custLabel)
-fileCounter = fileCounter + 1
-
-allTasks.Add Array(CustName & " + " & custAddr, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Google+Address.pdf", _
-1, "Name + Address", custLabel)
-fileCounter = fileCounter + 1
-End If
-
-If Trim(additionalCustAddr) <> "" Then
-allTasks.Add Array(CustName & " + " & additionalCustAddr, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Name+Additional Address.pdf", _
-1, "Name + Additional Address", custLabel)
-fileCounter = fileCounter + 1
-End If
-
-If Trim(custNameNegNews) <> "" Then
-allTasks.Add Array("""" & custNameNegNews & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Negative News 1.pdf", _
-1, "Negative News page 1", custLabel)
-fileCounter = fileCounter + 1
-allTasks.Add Array("""" & custNameNegNews & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Negative News 2.pdf", _
-2, "Negative News page 2", custLabel)
-fileCounter = fileCounter + 1
-End If
-
-If Trim(custNameNegNewsNoMiddle) <> "" And _
-StrComp(custNameNegNewsNoMiddle, custNameNegNews, vbTextCompare) <> 0 Then
-allTasks.Add Array("""" & custNameNegNewsNoMiddle & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Negative News 3.pdf", _
-1, "Negative News w/o middle, page 1", custLabel)
-fileCounter = fileCounter + 1
-allTasks.Add Array("""" & custNameNegNewsNoMiddle & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Negative News 4.pdf", _
-2, "Negative News w/o middle, page 2", custLabel)
-fileCounter = fileCounter + 1
-End If
-
-' Negative News WITHOUT the legal extension (2 pages), only if it differs.
-If Trim(custNameNegNewsNoLegal) <> "" And _
-StrComp(custNameNegNewsNoLegal, custNameNegNews, vbTextCompare) <> 0 Then
-allTasks.Add Array("""" & custNameNegNewsNoLegal & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Negative News 5.pdf", _
-1, "Negative News w/o legal ext, page 1", custLabel)
-fileCounter = fileCounter + 1
-allTasks.Add Array("""" & custNameNegNewsNoLegal & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_Customer_" & fileCounter & "_Negative News 6.pdf", _
-2, "Negative News w/o legal ext, page 2", custLabel)
-fileCounter = fileCounter + 1
-End If
+QueueEntitySearches allTasks, mainFolderPath, baseFileName & "_Customer_", custLabel, _
+CustName, custNameNegNews, negWords, custAddr, custExtraAddrs, custPhones, custEmails
 End If
 
 ' ---- Counterparty tasks (appended to same queue) ----
@@ -799,66 +667,25 @@ cpLoopPosition = 0
 For i = 18 To 23
 cpName = SanitizeFileNamePart(Trim(CStr(ws.Range("J" & i).Value)))
 cpAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("T" & i).Value)))
-
 If cpName <> "" Then
 cpLoopPosition = cpLoopPosition + 1
 cpLabel = "CP " & cpLoopPosition & " of " & totalCPs & " (" & cpName & ")"
-fileCounter = 1
-
-allTasks.Add Array(cpName, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Google.pdf", _
-1, "Google name", cpLabel)
-fileCounter = fileCounter + 1
-
-If cpAddr <> "" Then
-allTasks.Add Array(cpAddr, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Address.pdf", _
-1, "Address", cpLabel)
-fileCounter = fileCounter + 1
-
-allTasks.Add Array(cpName & " + " & cpAddr, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Google+Address.pdf", _
-1, "Name + Address", cpLabel)
-fileCounter = fileCounter + 1
-End If
-
-If Trim(cpNameNegNews(i)) <> "" Then
-allTasks.Add Array("""" & cpNameNegNews(i) & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Negative News 1.pdf", _
-1, "Negative News page 1", cpLabel)
-fileCounter = fileCounter + 1
-allTasks.Add Array("""" & cpNameNegNews(i) & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Negative News 2.pdf", _
-2, "Negative News page 2", cpLabel)
-fileCounter = fileCounter + 1
-End If
-
-If Trim(cpNameNegNewsNoMiddle(i)) <> "" And _
-StrComp(cpNameNegNewsNoMiddle(i), cpNameNegNews(i), vbTextCompare) <> 0 Then
-allTasks.Add Array("""" & cpNameNegNewsNoMiddle(i) & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Negative News 3.pdf", _
-1, "Negative News w/o middle, page 1", cpLabel)
-fileCounter = fileCounter + 1
-allTasks.Add Array("""" & cpNameNegNewsNoMiddle(i) & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Negative News 4.pdf", _
-2, "Negative News w/o middle, page 2", cpLabel)
-fileCounter = fileCounter + 1
-End If
-
-' Negative News WITHOUT the legal extension (2 pages), only if it differs.
-If Trim(cpNameNegNewsNoLegal(i)) <> "" And _
-StrComp(cpNameNegNewsNoLegal(i), cpNameNegNews(i), vbTextCompare) <> 0 Then
-allTasks.Add Array("""" & cpNameNegNewsNoLegal(i) & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Negative News 5.pdf", _
-1, "Negative News w/o legal ext, page 1", cpLabel)
-fileCounter = fileCounter + 1
-allTasks.Add Array("""" & cpNameNegNewsNoLegal(i) & """" & negWords, _
-mainFolderPath & "\" & baseFileName & "_CP" & (i - 17) & "_" & fileCounter & "_Negative News 6.pdf", _
-2, "Negative News w/o legal ext, page 2", cpLabel)
-fileCounter = fileCounter + 1
-End If
+QueueEntitySearches allTasks, mainFolderPath, baseFileName & "_CP" & (i - 17) & "_", cpLabel, _
+cpName, cpNameNegNews(i), negWords, cpAddr, cpExtraAddrs(i), cpPhones(i), cpEmails(i)
 End If
 Next i
+
+' ---- Other parties named in the narrative: Name + Negative News ----
+For k = 1 To otherParties.count
+QueueEntitySearches allTasks, mainFolderPath, baseFileName & "_Other" & k & "_", _
+"Other party " & k & " (" & otherParties(k) & ")", _
+SanitizeFileNamePart(CStr(otherParties(k))), ShortenName(CStr(otherParties(k))), negWords, _
+"", Nothing, Nothing, Nothing
+Next k
+
+' Search terms and the full URL of every search, beside the PDFs - the
+' documentation the Operating Manual asks for.
+WriteSearchLog allTasks, mainFolderPath & "\" & baseFileName & "_OSDD Search Log.csv"
 
 ' ---- Gap-fill: offer to run ONLY what's missing/failed ----
 ' Only asked when the case folder already holds results from a
@@ -1014,7 +841,7 @@ Else
 timeString = Seconds & " second(s)"
 End If
 
-entityCount = IIf(CustName <> "" Or custNameNegNews <> "", 1, 0) + totalCPs
+entityCount = IIf(CustName <> "", 1, 0) + totalCPs + otherParties.count
 ' actualSearchCount is the authoritative successful-PDF counter.
 ' We trust this over re-scanning the folder - OneDrive can lie
 ' about what's on disk while a sync is still in flight.
@@ -3927,5 +3754,355 @@ Loop
 If IgnoreESC Then GetAsyncKeyState 27
 End Sub
 
+' ==========================================================
+' OSDD SEARCHES PER ENTITY - Operating Manual 4.7 (External Research)
+' ==========================================================
+' Every search below saves SEARCH_PAGES pages of results ("first two
+' pages of search engine results"), Negative News always two:
+'   - Name, as recorded;
+'   - Name without its non-essential elements (legal extension, or middle
+'     names / initials and suffixes), when that differs - the broadened
+'     name search;
+'   - Address, for the address on Sheet1 and each additional address;
+'   - Name + Address, for each of those addresses;
+'   - Telephone, for each number given;
+'   - Email, for each address given (searched as an exact phrase);
+'   - Negative News: the procedure string with the Negative News name,
+'     which leaves out the non-essential name elements.
+' Files: <prefix><n>_<kind>.pdf, page 2 as "<kind> p2".
+' ==========================================================
+Private Sub QueueEntitySearches(ByVal tasks As Collection, ByVal folder As String, _
+    ByVal prefix As String, ByVal label As String, ByVal fullName As String, _
+    ByVal negName As String, ByVal negWords As String, ByVal mainAddr As String, _
+    ByVal extraAddrs As Collection, ByVal phones As Collection, ByVal emails As Collection)
 
+    Dim n As Long, shortName As String, addrs As Collection, item As Variant, k As Long, tag As String
 
+    If fullName = "" Then Exit Sub
+    n = 1
+
+    QueueSearch tasks, fullName, folder, prefix, n, "Google", "Google name", label, SEARCH_PAGES
+    shortName = negName
+    If shortName = "" Then shortName = ShortenName(fullName)
+    If shortName <> "" And StrComp(shortName, fullName, vbTextCompare) <> 0 Then
+        QueueSearch tasks, shortName, folder, prefix, n, "Google short name", "Google name (shortened)", label, SEARCH_PAGES
+    End If
+
+    Set addrs = New Collection
+    If mainAddr <> "" Then addrs.Add mainAddr
+    If Not extraAddrs Is Nothing Then
+        For Each item In extraAddrs
+            If Not InList(addrs, SanitizeFileNamePart(CStr(item))) Then addrs.Add SanitizeFileNamePart(CStr(item))
+        Next item
+    End If
+    k = 0
+    For Each item In addrs
+        k = k + 1
+        tag = IIf(k = 1, "", " " & k)
+        QueueSearch tasks, CStr(item), folder, prefix, n, "Address" & tag, "Address" & tag, label, SEARCH_PAGES
+        QueueSearch tasks, fullName & " + " & CStr(item), folder, prefix, n, "Google+Address" & tag, _
+            "Name + Address" & tag, label, SEARCH_PAGES
+    Next item
+
+    If Not phones Is Nothing Then
+        k = 0
+        For Each item In phones
+            k = k + 1
+            tag = IIf(phones.count = 1, "", " " & k)
+            QueueSearch tasks, CStr(item), folder, prefix, n, "Telephone" & tag, "Telephone" & tag, label, SEARCH_PAGES
+        Next item
+    End If
+
+    If Not emails Is Nothing Then
+        k = 0
+        For Each item In emails
+            k = k + 1
+            tag = IIf(emails.count = 1, "", " " & k)
+            QueueSearch tasks, """" & CStr(item) & """", folder, prefix, n, "Email" & tag, "Email" & tag, label, SEARCH_PAGES
+        Next item
+    End If
+
+    If negName <> "" Then
+        QueueSearch tasks, """" & negName & """" & negWords, folder, prefix, n, "Negative News", _
+            "Negative News", label, 2
+    End If
+End Sub
+
+' One search, queued once per page: Array(query, savePath, page,
+' description, entity label) - the task shape RunSearchBatch expects.
+Private Sub QueueSearch(ByVal tasks As Collection, ByVal query As String, ByVal folder As String, _
+    ByVal prefix As String, ByRef n As Long, ByVal kind As String, ByVal desc As String, _
+    ByVal label As String, ByVal pages As Long)
+    Dim p As Long
+    For p = 1 To pages
+        tasks.Add Array(query, folder & "\" & prefix & n & "_" & kind & IIf(p > 1, " p" & p, "") & ".pdf", _
+            p, desc & " page " & p, label)
+        n = n + 1
+    Next p
+End Sub
+
+' "Was there any additional address identified for X?" - Yes asks for the
+' address(es), pre-filled with any found in the transaction data. False
+' only if the analyst cancels the address box (the run is stopped, as
+' before).
+Private Function AskAdditionalAddresses(ByVal who As String, ByVal fromTransactions As String, _
+    ByRef addrs As Collection) As Boolean
+    Dim msg As String, resp As Long, s As String
+
+    Set addrs = New Collection
+    msg = "Was there any additional address identified for " & who & "?"
+    If fromTransactions <> "" Then
+        msg = msg & vbCrLf & vbCrLf & "Addresses in the transaction data that differ from the one on Sheet1:" & _
+            vbCrLf & "   " & Replace(fromTransactions, " ; ", vbCrLf & "   ")
+    End If
+    Application.StatusBar = "OSINT: Waiting for additional address decision (" & who & ")..."
+    resp = TopMostMsgBox(msg, "Additional Address", MB_YESNO Or MB_ICONQUESTION Or MB_TOPMOST)
+    If resp = IDYES Then
+        Beep
+        ForcePromptToFront
+        s = InputBox("Enter the additional address(es) for " & who & "." & vbCrLf & vbCrLf & _
+            "Separate several with a semicolon ( ; ). Each gets an Address and a Name + Address search.", _
+            "Additional Address", fromTransactions)
+        If StrPtr(s) = 0 Then Exit Function
+        Set addrs = SplitList(s)
+    End If
+    AskAdditionalAddresses = True
+End Function
+
+' Telephone numbers and email addresses for X, in one box: entries are
+' separated by semicolons; one with an "@" is an email, the rest phones.
+' False only if the analyst cancels (the run is stopped).
+Private Function AskPhonesAndEmails(ByVal who As String, ByRef phones As Collection, _
+    ByRef emails As Collection) As Boolean
+    Dim s As String, item As Variant
+
+    Set phones = New Collection
+    Set emails = New Collection
+    Application.StatusBar = "OSINT: Waiting for telephone / email input (" & who & ")..."
+    Beep
+    ForcePromptToFront
+    s = InputBox("Telephone number(s) or email address(es) for " & who & ", if any." & vbCrLf & vbCrLf & _
+        "Separate several with a semicolon ( ; ). Leave blank if none.", "Telephone / Email")
+    If StrPtr(s) = 0 Then Exit Function
+    For Each item In SplitList(s)
+        If InStr(CStr(item), "@") > 0 Then emails.Add CStr(item) Else phones.Add CStr(item)
+    Next item
+    AskPhonesAndEmails = True
+End Function
+
+' Semicolon (or line) separated text as a list: trimmed, blanks dropped,
+' repeats (any case) dropped.
+Private Function SplitList(ByVal s As String) As Collection
+    Dim out As New Collection, parts() As String, i As Long, t As String
+    s = Replace(Replace(Replace(s, vbCrLf, ";"), vbLf, ";"), vbCr, ";")
+    parts = Split(s, ";")
+    For i = LBound(parts) To UBound(parts)
+        t = Trim$(Replace(parts(i), Chr(160), " "))
+        Do While InStr(t, "  ") > 0
+            t = Replace(t, "  ", " ")
+        Loop
+        If t <> "" Then
+            If Not InList(out, t) Then out.Add t
+        End If
+    Next i
+    Set SplitList = out
+End Function
+
+Private Function InList(ByVal c As Collection, ByVal s As String) As Boolean
+    Dim item As Variant
+    For Each item In c
+        If StrComp(CStr(item), s, vbTextCompare) = 0 Then
+            InList = True
+            Exit Function
+        End If
+    Next item
+End Function
+
+' The name without the elements the procedure calls non-essential for
+' string searches: an entity's legal extension (LLC, Inc, Ltd...); for a
+' person, a generational suffix (Jr, Sr, II, III, IV, V) and any middle
+' names or initials - first and last name kept. A name that reads as a
+' business (a legal extension, a business word such as Trading / Group /
+' Services, "&", a digit or a web domain) only ever loses its legal
+' extension. The analyst sees and can correct the result.
+Private Function ShortenName(ByVal fullName As String) As String
+    Dim s As String, legal As String, w() As String, n As Long, lastW As String
+
+    s = Trim$(Replace(fullName, Chr(160), " "))
+    Do While InStr(s, "  ") > 0
+        s = Replace(s, "  ", " ")
+    Loop
+    If s = "" Then Exit Function
+
+    legal = StripLegalExtension(s)
+    If legal <> "" Then
+        ShortenName = legal
+        Exit Function
+    End If
+    If LooksLikeBusiness(s) Then
+        ShortenName = s
+        Exit Function
+    End If
+
+    w = Split(s, " ")
+    n = UBound(w) + 1
+    lastW = UCase$(Replace(Replace(w(n - 1), ".", ""), ",", ""))
+    If n >= 3 And (lastW = "JR" Or lastW = "SR" Or lastW = "II" Or lastW = "III" Or _
+                   lastW = "IV" Or lastW = "V") Then
+        n = n - 1
+        w(n - 1) = Replace(w(n - 1), ",", "")
+    End If
+    If n >= 3 Then
+        ShortenName = w(0) & " " & w(n - 1)
+    ElseIf n = 2 Then
+        ShortenName = w(0) & " " & w(1)
+    Else
+        ShortenName = w(0)
+    End If
+End Function
+
+Private Function LooksLikeBusiness(ByVal s As String) As Boolean
+    Dim u As String, words As Variant, i As Long
+    u = " " & UCase$(s) & " "
+    If InStr(u, "&") > 0 Or u Like "*[0-9]*" Then LooksLikeBusiness = True: Exit Function
+    If InStr(u, ".COM") > 0 Or InStr(u, ".NET") > 0 Or InStr(u, ".ORG") > 0 Or InStr(u, ".IO") > 0 Then
+        LooksLikeBusiness = True
+        Exit Function
+    End If
+    words = Array("TRADING", "TRADE", "GROUP", "HOLDING", "HOLDINGS", "SERVICE", "SERVICES", "SOLUTIONS", _
+        "TECH", "TECHNOLOGY", "TECHNOLOGIES", "INTERNATIONAL", "GLOBAL", "ENTERPRISE", "ENTERPRISES", _
+        "INDUSTRIES", "INVESTMENT", "INVESTMENTS", "CAPITAL", "PARTNERS", "MANAGEMENT", "CONSULTING", _
+        "MARKETING", "SYSTEMS", "BANK", "PAY", "PAYMENTS", "FINANCE", "FINANCIAL", "STORE", "SHOP", _
+        "MARKET", "FOODS", "LOGISTICS", "VENTURES", "ASSOCIATES", "AGENCY", "STUDIO", "MEDIA", "HOTEL", _
+        "RESTAURANT", "PHARMACY", "MOTORS", "AUTO", "IMPORT", "EXPORT", "DISTRIBUTION", "SUPPLY", _
+        "CONSTRUCTION", "REALTY", "PROPERTIES", "FOUNDATION", "TRUST", "CHURCH", "SCHOOL", "UNIVERSITY", _
+        "COLLEGE", "CLINIC", "HOSPITAL", "INSURANCE", "EXCHANGE", "LABS", "LAB", "NETWORK", "DIGITAL")
+    For i = LBound(words) To UBound(words)
+        If InStr(u, " " & words(i) & " ") > 0 Then
+            LooksLikeBusiness = True
+            Exit Function
+        End If
+    Next i
+End Function
+
+' Addresses for one party in ConsolidatedData (the case's transactions),
+' other than excludeAddr and other than country-only entries, as
+' "addr1 ; addr2" - up to five, kept short enough for an InputBox
+' (255 characters). The customer is the originator on DR rows and the
+' beneficiary on CR rows; a counterparty (forCustomer False, matched by
+' the Counterparty column) is the other side. "" if nothing is found or
+' the sheet doesn't have the columns.
+Private Function TransactionAddresses(ByVal forCustomer As Boolean, ByVal cpName As String, _
+    ByVal excludeAddr As String) As String
+    Dim cd As Worksheet, lastR As Long, lastC As Long, v As Variant
+    Dim cDr As Long, cBen As Long, cOrig As Long, cCp As Long
+    Dim r As Long, side As String, a As String, key As String, seen As String, out As String, cnt As Long
+    Dim cpKey As String, isDr As Boolean
+
+    On Error GoTo Done
+    Set cd = ThisWorkbook.Sheets("ConsolidatedData")
+    lastR = cd.Cells(cd.Rows.count, 1).End(xlUp).row
+    lastC = cd.Cells(1, cd.Columns.count).End(xlToLeft).Column
+    If lastR < 2 Or lastC < 2 Then Exit Function
+    cDr = HeaderIndexOf(cd, lastC, "Dr Cr")
+    cBen = HeaderIndexOf(cd, lastC, "Beneficiary Address")
+    cOrig = HeaderIndexOf(cd, lastC, "Originator Address")
+    If cDr = 0 Or cBen = 0 Or cOrig = 0 Then Exit Function
+    If Not forCustomer Then
+        cCp = HeaderIndexOf(cd, lastC, "Counterparty")
+        If cCp = 0 Then Exit Function
+        cpKey = AddrKey(cpName)
+        If cpKey = "" Then Exit Function
+    End If
+
+    v = cd.Range(cd.Cells(2, 1), cd.Cells(lastR, lastC)).Value2
+    seen = "|" & AddrKey(excludeAddr) & "|"
+    For r = 1 To UBound(v, 1)
+        side = UCase$(Trim$(CellStr(v(r, cDr))))
+        If side = "DR" Or side = "CR" Then
+            isDr = (side = "DR")
+            If forCustomer Then
+                If isDr Then a = CellStr(v(r, cOrig)) Else a = CellStr(v(r, cBen))
+            ElseIf AddrKey(CellStr(v(r, cCp))) = cpKey Then
+                If isDr Then a = CellStr(v(r, cBen)) Else a = CellStr(v(r, cOrig))
+            Else
+                a = ""
+            End If
+            a = Trim$(a)
+            Do While InStr(a, "  ") > 0
+                a = Replace(a, "  ", " ")
+            Loop
+            key = AddrKey(a)
+            If Len(key) > 3 And InStr(seen, "|" & key & "|") = 0 Then
+                If Len(out) + Len(a) + 3 > 250 Or cnt >= 5 Then Exit For
+                seen = seen & key & "|"
+                If out <> "" Then out = out & " ; "
+                out = out & a
+                cnt = cnt + 1
+            End If
+        End If
+    Next r
+    TransactionAddresses = out
+Done:
+End Function
+
+' A cell value as text; "" for an error value (#N/A etc.).
+Private Function CellStr(ByVal x As Variant) As String
+    If Not IsError(x) Then CellStr = CStr(x)
+End Function
+
+' Letters and digits only, upper case - for comparing names and addresses.
+Private Function AddrKey(ByVal s As String) As String
+    Dim i As Long, ch As String, out As String
+    s = UCase$(s)
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "[A-Z0-9]" Then out = out & ch
+    Next i
+    AddrKey = out
+End Function
+
+' Column of the first row-1 header containing what (any case), or 0.
+Private Function HeaderIndexOf(ByVal ws As Worksheet, ByVal lastC As Long, ByVal what As String) As Long
+    Dim c As Long
+    For c = 1 To lastC
+        If InStr(1, CStr(ws.Cells(1, c).Value), what, vbTextCompare) > 0 Then
+            HeaderIndexOf = c
+            Exit Function
+        End If
+    Next c
+End Function
+
+' Every queued search with its search terms and full URL, as a CSV beside
+' the PDFs (UTF-8, opens in Excel): the Operating Manual asks for the
+' search terms and full URL of each search to be documented. Best effort -
+' a log that can't be written (e.g. open in Excel) never stops the run.
+Private Sub WriteSearchLog(ByVal tasks As Collection, ByVal path As String)
+    Dim stm As Object, i As Long, t As Variant
+    On Error GoTo Done
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 2
+    stm.Charset = "utf-8"
+    stm.Open
+    stm.WriteText "File,Entity,Search,Page,Search terms,URL" & vbCrLf
+    For i = 1 To tasks.count
+        t = tasks(i)
+        stm.WriteText CsvField(Mid$(CStr(t(1)), InStrRev(CStr(t(1)), "\") + 1)) & "," & _
+            CsvField(CStr(t(4))) & "," & CsvField(CStr(t(3))) & "," & CStr(t(2)) & "," & _
+            CsvField(CStr(t(0))) & "," & CsvField(SearchURL(CStr(t(0)), CLng(t(2)))) & vbCrLf
+    Next i
+    stm.SaveToFile path, 2      ' overwrite
+    stm.Close
+Done:
+End Sub
+
+Private Function CsvField(ByVal s As String) As String
+    CsvField = """" & Replace(s, """", """""") & """"
+End Function
+
+' The Google URL a search is printed from - the same one the PDF workers
+' build (num=100, hl=en, page 2 from result 11).
+Private Function SearchURL(ByVal query As String, ByVal pageNum As Long) As String
+    SearchURL = "https://www.google.com/search?q=" & URLEncode(query) & "&num=100&hl=en"
+    If pageNum > 1 Then SearchURL = SearchURL & "&start=" & ((pageNum - 1) * 10)
+End Function
