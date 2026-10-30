@@ -128,17 +128,17 @@ Private Const MIN_PDF_SIZE_BYTES As Long = 5120
 ' News (always two): the Operating Manual (4.7) asks for the first two
 ' pages of search-engine results.
 Private Const SEARCH_PAGES As Long = 2
-' Sheet1: counterparties 1-5 on rows 18-22 (row 23 is Other Parties).
+' Sheet1: counterparties 1-5 on rows 18-22 (row 23, the old Counterparty 6,
+' is left empty).
 Private Const CP_FIRST_ROW As Long = 18
 Private Const CP_LAST_ROW As Long = 22
 ' The OSDD inputs panel on Sheet1 (see StyleOsddInputs): the customer's
-' column, then counterparties 1-5; its rows; and the other parties' cell.
+' column, then counterparties 1-5; and its rows.
 Private Const OSDD_CUST_COL As Long = 23             ' W
 Private Const OSDD_ROW_NEG As Long = 5
 Private Const OSDD_ROW_ADDR As Long = 6              ' 6 to 8
 Private Const OSDD_ROW_PHONE As Long = 9
 Private Const OSDD_ROW_EMAIL As Long = 10
-Private Const OTHER_PARTIES_CELL As String = "J23"
 
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
@@ -458,7 +458,6 @@ Dim cpNameNegNews(CP_FIRST_ROW To CP_LAST_ROW) As String
 Dim custExtraAddrs As Collection, custPhones As Collection, custEmails As Collection
 Dim cpExtraAddrs(CP_FIRST_ROW To CP_LAST_ROW) As Collection, cpPhones(CP_FIRST_ROW To CP_LAST_ROW) As Collection
 Dim cpEmails(CP_FIRST_ROW To CP_LAST_ROW) As Collection
-Dim otherParties As Collection, k As Long
 
 Dim baseFileName As String, desktopPath As String
 Dim caseFolderPath As String, mainFolderPath As String
@@ -482,7 +481,6 @@ bAbort = False
 Set custExtraAddrs = New Collection
 Set custPhones = New Collection
 Set custEmails = New Collection
-Set otherParties = New Collection
 wasAlreadyOpen = False
 totalCPs = 0
 spSyncStatus = "SKIPPED"
@@ -583,7 +581,7 @@ LogStep "STEP 2: after PrewarmEdgeProfiles"
 ' The analyst's OSDD inputs, per the Operating Manual's external research
 ' steps (4.7), are in the panel on Sheet1 (see StyleOsddInputs): the
 ' Negative News name, any additional addresses and telephones / emails
-' per entity, and the other parties named in the narrative.
+' per entity.
 If CustName <> "" Then
 ReadOsddInputs ws, OSDD_CUST_COL, CustName, custAddr, _
 custNameNegNews, custExtraAddrs, custPhones, custEmails
@@ -599,7 +597,6 @@ ReadOsddInputs ws, OSDD_CUST_COL + 1 + i - CP_FIRST_ROW, cpName, cpAddr, _
 cpNameNegNews(i), cpExtraAddrs(i), cpPhones(i), cpEmails(i)
 End If
 Next i
-Set otherParties = SplitList(CellStr(ws.Range(OTHER_PARTIES_CELL).Value))
 LogStep "STEP 3: OSDD inputs read from Sheet1"
 
 LogStep "STEP 3: before Starting Searches MsgBox"
@@ -618,7 +615,7 @@ If Not CheckDiskSpace() Then Exit Sub
 AutoPrepareRuntime
 StartTime = Now
 LogStep "SEARCH PHASE start - total entities to process: " & _
-(IIf(CustName <> "", 1, 0) + totalCPs + otherParties.count)
+(IIf(CustName <> "", 1, 0) + totalCPs)
 
 ' Build one flat queue for the customer + every counterparty + other
 ' parties. Keeping all tasks in a single pool means the workers never sit
@@ -646,14 +643,6 @@ QueueEntitySearches allTasks, mainFolderPath, baseFileName & "_CP" & (i - 17) & 
 cpName, cpNameNegNews(i), negWords, cpAddr, cpExtraAddrs(i), cpPhones(i), cpEmails(i)
 End If
 Next i
-
-' ---- Other parties named in the narrative: Name + Negative News ----
-For k = 1 To otherParties.count
-QueueEntitySearches allTasks, mainFolderPath, baseFileName & "_Other" & k & "_", _
-"Other party " & k & " (" & otherParties(k) & ")", _
-SanitizeFileNamePart(CStr(otherParties(k))), ShortenName(CStr(otherParties(k))), negWords, _
-"", Nothing, Nothing, Nothing
-Next k
 
 ' Search terms and the full URL of every search, beside the PDFs - the
 ' documentation the Operating Manual asks for.
@@ -813,7 +802,7 @@ Else
 timeString = Seconds & " second(s)"
 End If
 
-entityCount = IIf(CustName <> "", 1, 0) + totalCPs + otherParties.count
+entityCount = IIf(CustName <> "", 1, 0) + totalCPs
 ' actualSearchCount is the authoritative successful-PDF counter.
 ' We trust this over re-scanning the folder - OneDrive can lie
 ' about what's on disk while a sync is still in flight.
@@ -3979,8 +3968,8 @@ End Function
 '         extension, middle names or suffixes (Operating Manual 4.7).
 '   6-8   up to 3 additional addresses
 '   9     telephone(s), 10 email(s) - several separated by ;
-' Other parties named in the narrative are in J23, the row under
-' Counterparty 5. The theme picker is V13.
+' The theme picker is V13. Row 23 (the old Counterparty 6) is empty and
+' locked.
 '==================================================================
 
 ' Gives the panel the look of the form beside it in whatever theme is
@@ -4019,7 +4008,8 @@ Public Sub StyleOsddInputs()
     ws.Range("W5:AB10").HorizontalAlignment = xlLeft
     ws.Range("W5:AB10,V13").VerticalAlignment = xlCenter
     ws.Range("V13").HorizontalAlignment = xlCenter
-    ws.Range("W5:AB10,V13,J23").Locked = False
+    ws.Range("W5:AB10,V13").Locked = False
+    ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
 
     If wasProt Then ws.Protect Password:="p7ss"

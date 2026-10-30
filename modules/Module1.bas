@@ -26,7 +26,7 @@ ws.Unprotect Password:="p7ss"
 '   J18:J23   = Counterparty names   (matches GetCounterpartyList)
 '   T18:T23   = Counterparty second field (addresses)
 '   G27       = country; L27:N27 = ISO2 (full merge); O27 = ISO3.
-'   J23       = Other Parties (row 23 was Counterparty 6)
+'   J23       = empty and locked (row 23 was Counterparty 6)
 '   W5:AB10   = OSDD Search Inputs panel (customer + CP1-5 columns)
 ' ISO2/ISO3 are input cells now (no longer XLOOKUP formulas), so they
 ' must be cleared explicitly - clearing the country alone won't blank them.
