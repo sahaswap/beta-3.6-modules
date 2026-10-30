@@ -447,6 +447,7 @@ Dim cpNameNegNews(18 To 23) As String
 Dim custExtraAddrs As Collection, custPhones As Collection, custEmails As Collection
 Dim cpExtraAddrs(18 To 23) As Collection, cpPhones(18 To 23) As Collection, cpEmails(18 To 23) As Collection
 Dim otherParties As Collection, inputText As String, k As Long
+Dim osddForm As Object, osddFormUsed As Boolean
 
 Dim baseFileName As String, desktopPath As String
 Dim caseFolderPath As String, mainFolderPath As String
@@ -573,6 +574,54 @@ LogStep "STEP 2: after PrewarmEdgeProfiles"
 ' name without its non-essential elements, any additional addresses,
 ' telephone numbers / email addresses, and any other parties named in
 ' the narrative.
+' All on one screen (frmOsddInputs, built by BuildFrmOsddInputs) when the
+' workbook has it; otherwise a prompt for each, as before.
+For i = 18 To 23
+Set cpExtraAddrs(i) = New Collection
+Set cpPhones(i) = New Collection
+Set cpEmails(i) = New Collection
+Next i
+osddFormUsed = False
+On Error Resume Next
+Set osddForm = VBA.UserForms.Add("frmOsddInputs")
+On Error GoTo ErrorHandler
+
+If Not osddForm Is Nothing Then
+LogStep "STEP 3: before OSDD inputs form"
+If CustName <> "" Then osddForm.AddRow "C", "Customer: " & CustName, ShortenName(CustName), _
+TransactionAddresses(True, "", custAddr)
+For i = 18 To 23
+cpName = SanitizeFileNamePart(Trim(CStr(ws.Range("J" & i).Value)))
+cpAddr = SanitizeFileNamePart(Trim(CStr(ws.Range("T" & i).Value)))
+If cpName <> "" Then osddForm.AddRow CStr(i), "CP" & (i - 17) & ": " & cpName, ShortenName(cpName), _
+TransactionAddresses(False, cpName, cpAddr)
+Next i
+Application.StatusBar = "OSINT: Waiting for OSDD search inputs..."
+Beep
+ForcePromptToFront
+osddForm.Show
+LogStep "STEP 3: OSDD inputs form closed, cancelled=" & osddForm.Cancelled
+If osddForm.Cancelled Then
+Unload osddForm
+Exit Sub
+End If
+If CustName <> "" Then
+custNameNegNews = NormalizeSpaces(osddForm.RowText("C", "Neg"))
+Set custExtraAddrs = SplitList(osddForm.RowAddresses("C"))
+ParseContacts osddForm.RowText("C", "Contact"), custPhones, custEmails
+End If
+For i = 18 To 23
+cpNameNegNews(i) = NormalizeSpaces(osddForm.RowText(CStr(i), "Neg"))
+Set cpExtraAddrs(i) = SplitList(osddForm.RowAddresses(CStr(i)))
+ParseContacts osddForm.RowText(CStr(i), "Contact"), cpPhones(i), cpEmails(i)
+Next i
+Set otherParties = SplitList(osddForm.OtherPartiesText)
+Unload osddForm
+Set osddForm = Nothing
+osddFormUsed = True
+End If
+
+If Not osddFormUsed Then
 If CustName <> "" Then
 LogStep "STEP 3: before customer negnews InputBox"
 Application.StatusBar = "OSINT: Waiting for Customer Negative News input..."
@@ -629,6 +678,7 @@ inputText = InputBox( _
 "Each gets a Name search and a Negative News search.", "Other Parties")
 If StrPtr(inputText) = 0 Then Exit Sub
 Set otherParties = SplitList(inputText)
+End If
 
 LogStep "STEP 3: before Starting Searches MsgBox"
 Application.StatusBar = "OSINT: Waiting for Starting-Searches confirmation..."
@@ -3874,7 +3924,7 @@ End Function
 ' False only if the analyst cancels (the run is stopped).
 Private Function AskPhonesAndEmails(ByVal who As String, ByRef phones As Collection, _
     ByRef emails As Collection) As Boolean
-    Dim s As String, item As Variant
+    Dim s As String
 
     Set phones = New Collection
     Set emails = New Collection
@@ -3884,11 +3934,20 @@ Private Function AskPhonesAndEmails(ByVal who As String, ByRef phones As Collect
     s = InputBox("Telephone number(s) or email address(es) for " & who & ", if any." & vbCrLf & vbCrLf & _
         "Separate several with a semicolon ( ; ). Leave blank if none.", "Telephone / Email")
     If StrPtr(s) = 0 Then Exit Function
+    ParseContacts s, phones, emails
+    AskPhonesAndEmails = True
+End Function
+
+' Telephone numbers / email addresses from one box: entries separated by
+' semicolons; one with an "@" is an email, the rest are phones.
+Private Sub ParseContacts(ByVal s As String, ByRef phones As Collection, ByRef emails As Collection)
+    Dim item As Variant
+    Set phones = New Collection
+    Set emails = New Collection
     For Each item In SplitList(s)
         If InStr(CStr(item), "@") > 0 Then emails.Add CStr(item) Else phones.Add CStr(item)
     Next item
-    AskPhonesAndEmails = True
-End Function
+End Sub
 
 ' Semicolon (or line) separated text as a list: trimmed, blanks dropped,
 ' repeats (any case) dropped.
