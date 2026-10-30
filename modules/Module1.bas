@@ -26,10 +26,11 @@ ws.Unprotect Password:="p7ss"
 '   J18:J23   = Counterparty names   (matches GetCounterpartyList)
 '   T18:T23   = Counterparty second field (addresses)
 '   G27       = country; L27:N27 = ISO2 (full merge); O27 = ISO3.
-'   V13:AB13, V18:AB22, V27:AB27 = OSDD inputs (Module2 SetupOsddInputs)
+'   J23       = Other Parties (row 23 was Counterparty 6)
+'   W5:AB10   = OSDD Search Inputs panel (customer + CP1-5 columns)
 ' ISO2/ISO3 are input cells now (no longer XLOOKUP formulas), so they
 ' must be cleared explicitly - clearing the country alone won't blank them.
-ws.Range("J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, V13:AB13, V18:AB22, V27:AB27").Value = ""
+ws.Range("J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, W5:AB10").Value = ""
 ws.Protect Password:="p7ss"
 Restore:
 restoreErrNum = Err.Number

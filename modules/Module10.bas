@@ -35,8 +35,7 @@ entityChoice = InputBox("Which entity are you merging files for?" & vbCrLf & vbC
                         "2 = Counterparty 2" & vbCrLf & _
                         "3 = Counterparty 3" & vbCrLf & _
                         "4 = Counterparty 4" & vbCrLf & _
-                        "5 = Counterparty 5" & vbCrLf & _
-                        "6 = Counterparty 6", "Select Entity", "0")
+                        "5 = Counterparty 5", "Select Entity", "0")
                         
 If StrPtr(entityChoice) = 0 Or entityChoice = "" Then Exit Sub
 
@@ -50,9 +49,8 @@ Case "2": entity = "CP2_" & Trim(wsHome.Range("J19").Value) ' Counterparty 2
 Case "3": entity = "CP3_" & Trim(wsHome.Range("J20").Value) ' Counterparty 3
 Case "4": entity = "CP4_" & Trim(wsHome.Range("J21").Value) ' Counterparty 4
 Case "5": entity = "CP5_" & Trim(wsHome.Range("J22").Value) ' Counterparty 5
-Case "6": entity = "CP6_" & Trim(wsHome.Range("J23").Value) ' Counterparty 6
 Case Else
-MsgBox "Invalid selection. Please run again and enter a number from 0 to 6.", vbExclamation, "Error"
+MsgBox "Invalid selection. Please run again and enter a number from 0 to 5.", vbExclamation, "Error"
 Exit Sub
 End Select
 

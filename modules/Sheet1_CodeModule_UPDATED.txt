@@ -54,14 +54,14 @@ Private Sub Worksheet_Change(ByVal target As Range)
     ' handler has exited and sheet protection has settled - see the
     ' notes at the top of this file.
     ' ==========================================================
-    If Not Intersect(target, Me.Range("U28")) Is Nothing Then
+    If Not Intersect(target, Me.Range("V13")) Is Nothing Then
         On Error Resume Next
         Application.OnTime Now + TimeSerial(0, 0, 1), "OnThemePicked"
         On Error GoTo ErrorHandler
 
         ' If U28 was the whole change, nothing else in this handler
         ' applies - leave before touching protection.
-        If Intersect(target, Me.Range("U28")).Address = target.Address Then Exit Sub
+        If Intersect(target, Me.Range("V13")).Address = target.Address Then Exit Sub
     End If
 
     ' Break sheet grouping if active (grouped sheets prevent Protect/Unprotect)

@@ -49,7 +49,7 @@ Public Const THEME_DESERT As String = "DESERT"
 Public Const THEME_NAVY As String = "NAVYGOLD"
 
 Private Const SHEET_NAME As String = "Sheet1"
-Private Const PICKER_CELL As String = "U28"
+Private Const PICKER_CELL As String = "V13"
 Private Const STATE_NAME As String = "_ActiveTheme"
 Private Const PWD As String = "p7ss"
 

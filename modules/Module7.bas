@@ -103,7 +103,7 @@ If fd.Show = -1 Then
             
             ' Build the dynamic menu with actual names
             entityMenu = "Who is this file for?" & vbNewLine & vbNewLine & "0: Customer (" & CustName & ")"
-            For i = 1 To 6
+            For i = 1 To 5
                 tempCP = ws.Range("J18").Offset(i - 1, 0).Value
                 If tempCP <> "" Then
                     entityMenu = entityMenu & vbNewLine & i & ": Counterparty " & i & " (" & tempCP & ")"
@@ -154,7 +154,7 @@ If fd.Show = -1 Then
                 End Select
 
             ' STEP 2B: COUNTERPARTY LOGIC
-            ElseIf Val(entityChoice) >= 1 And Val(entityChoice) <= 6 Then
+            ElseIf Val(entityChoice) >= 1 And Val(entityChoice) <= 5 Then
                 Dim cpIdx As Integer: cpIdx = Val(entityChoice)
                 Dim cpCellVal As String: cpCellVal = ws.Range("J18").Offset(cpIdx - 1, 0).Value
 
@@ -288,7 +288,7 @@ If ECM = "" Or AlertID = "" Then MsgBox "Fill ECM (J9) & Alert ID (J10)!", vbCri
 
 Dim CPNames(1 To 6) As String
 Dim i As Long
-For i = 1 To 6
+For i = 1 To 5
 CPNames(i) = ws.Range("J18").Offset(i - 1, 0).Value
 Next i
 

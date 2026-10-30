@@ -595,7 +595,7 @@ Private Sub GeneratePreRFIWriteUp(ByVal wdApp As Object, ByVal folderPath As Str
     Dim wsHome As Worksheet
     Set wsHome = ThisWorkbook.Sheets("Sheet1")
     Dim cpLines As String, rowIdx As Long, slot As Long
-    For rowIdx = 18 To 23
+    For rowIdx = 18 To 22
         If Trim$(CStr(wsHome.Range("J" & rowIdx).Value)) <> "" Then
             slot = rowIdx - 17                      ' J18 -> CP 1 ... J23 -> CP 6
             If cpLines <> "" Then cpLines = cpLines & vbCr
