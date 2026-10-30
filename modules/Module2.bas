@@ -506,10 +506,15 @@ vbExclamation, "Missing Case ID"
 Exit Sub
 End If
 
+' Negative-news terms, word for word as the procedure's negative-news
+' string. Google ignores the commas and the * / ? endings in the part after
+' "terror", so it reads those words as all required rather than as
+' alternatives - kept exactly as the procedure writes it.
 negWords = " AND (arrest OR corruption OR sentencing OR money laundering OR AML " & _
 "OR launder OR embezzle OR evas OR evad OR crime OR corrupt OR bribe OR " & _
 "theft OR extort OR drug OR traffic OR trafficking OR felony OR sanction " & _
-"OR counterfeit OR terror)"
+"OR counterfeit OR terror OR investigat*, indict*, charge?, court, lawsuit, " & _
+"judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"
 
 baseFileName = ecmCase & "_" & AlertID
 baseFileName = Replace(baseFileName, " ", "_")
