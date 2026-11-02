@@ -126,9 +126,8 @@ Private Const TOOL_VERSION As String = "3.5"
 Private Const MIN_PDF_SIZE_BYTES As Long = 5120
 
 ' Pages of Google results saved for each OSDD search other than Negative
-' News (always two): the Operating Manual (4.7) asks for the first two
-' pages of search-engine results.
-Private Const SEARCH_PAGES As Long = 2
+' News, which always gets two (pages 1 and 2). One page for the rest.
+Private Const SEARCH_PAGES As Long = 1
 ' Sheet1: counterparties 1-5 on rows 18-22 (row 23, the old Counterparty 6,
 ' is left empty).
 Private Const CP_FIRST_ROW As Long = 18
@@ -3719,8 +3718,8 @@ End Sub
 ' ==========================================================
 ' OSDD SEARCHES PER ENTITY - Operating Manual 4.7 (External Research)
 ' ==========================================================
-' Every search below saves SEARCH_PAGES pages of results ("first two
-' pages of search engine results"), Negative News always two:
+' Every search below saves SEARCH_PAGES page(s) of results (one), and
+' Negative News two:
 '   - Name, as recorded;
 '   - Name without its non-essential elements (legal extension, or middle
 '     names / initials and suffixes), when that differs - the broadened
