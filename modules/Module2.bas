@@ -4017,6 +4017,9 @@ Public Sub StyleOsddInputs()
     For Each r In Array(14, 18, 19, 20, 21, 22)
         CopyLook ws.Range("T" & r), ws.Range("V" & r & ":AB" & r)
     Next r
+    ' Row 23 is hidden, and the line under Counterparty 5 is drawn from the
+    ' bottom of row 23 (as the table's own is): give V23:AB23 the same.
+    CopyLook ws.Range("T23"), ws.Range("V23:AB23")
     inputs.HorizontalAlignment = ws.Range("T18").HorizontalAlignment
     inputs.VerticalAlignment = ws.Range("T18").VerticalAlignment
     inputs.Locked = False
