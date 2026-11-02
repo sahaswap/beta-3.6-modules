@@ -138,7 +138,8 @@ Private Const CP_LAST_ROW As Long = 22
 Private Const OSDD_CUST_COL As Long = 23             ' W
 Private Const OSDD_ROW_NEG As Long = 6
 Private Const OSDD_ROW_ADDR As Long = 7              ' 7 to 9
-Private Const OSDD_ROW_CONTACT As Long = 10          ' telephones / emails
+Private Const OSDD_ROW_PHONE As Long = 10
+Private Const OSDD_ROW_EMAIL As Long = 11
 
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
@@ -3968,7 +3969,7 @@ End Function
 '   6     Negative News name. Blank = the name without its legal
 '         extension, middle names or suffixes (Operating Manual 4.7).
 '   7-9   up to 3 other (additional) addresses
-'   10    phone(s) / email(s) - several separated by ;
+'   10    phone(s), 11 email(s) - several separated by ;
 ' Below it, the theme picker in V13 under its own banner. Row 23 (the
 ' old Counterparty 6) is hidden.
 '==================================================================
@@ -3996,14 +3997,14 @@ Public Sub StyleOsddInputs()
         .ShrinkToFit = False
     End With
 
-    CopyLook ws.Range("G18"), ws.Range("V6:V10")
-    ws.Range("V6:V10").HorizontalAlignment = ws.Range("G18").HorizontalAlignment
-    ws.Range("V6:V10").VerticalAlignment = ws.Range("G18").VerticalAlignment
+    CopyLook ws.Range("G18"), ws.Range("V6:V11")
+    ws.Range("V6:V11").HorizontalAlignment = ws.Range("G18").HorizontalAlignment
+    ws.Range("V6:V11").VerticalAlignment = ws.Range("G18").VerticalAlignment
 
-    CopyLook ws.Range("T18"), ws.Range("W6:AB10,V13")
-    ws.Range("W6:AB10,V13").HorizontalAlignment = ws.Range("T18").HorizontalAlignment
-    ws.Range("W6:AB10,V13").VerticalAlignment = ws.Range("T18").VerticalAlignment
-    ws.Range("W6:AB10,V13").Locked = False
+    CopyLook ws.Range("T18"), ws.Range("W6:AB11,V13")
+    ws.Range("W6:AB11,V13").HorizontalAlignment = ws.Range("T18").HorizontalAlignment
+    ws.Range("W6:AB11,V13").VerticalAlignment = ws.Range("T18").VerticalAlignment
+    ws.Range("W6:AB11,V13").Locked = False
     ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
 
@@ -4091,5 +4092,6 @@ Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal col As Long, ByVal fullN
         If AddrKey(CStr(item)) <> AddrKey(mainAddr) Then addrs.Add CStr(item)
     Next item
 
-    ParseContacts CellStr(ws.Cells(OSDD_ROW_CONTACT, col).Value), phones, emails
+    ParseContacts CellStr(ws.Cells(OSDD_ROW_PHONE, col).Value) & ";" & _
+        CellStr(ws.Cells(OSDD_ROW_EMAIL, col).Value), phones, emails
 End Sub

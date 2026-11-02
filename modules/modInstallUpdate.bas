@@ -21,7 +21,7 @@ Attribute VB_Name = "modInstallUpdate"
 '     fits Sheet1 to the window on opening
 ' Step 2, Sheet1 - runs by itself once step 1 has finished, so the
 ' replaced modules are really gone:
-'   - the OSDD Search Inputs panel in V3:AB10 and the theme picker in V13
+'   - the OSDD Search Inputs panel in V3:AB11 and the theme picker in V13
 '     (the theme manager puts copies of the form's banner shapes over
 '     them, and the sidebar back in its 3.6.1 places, on every theme
 '     change); gaps, column T and the panel narrowed and the text set to
@@ -38,7 +38,7 @@ Private Const PICKER_OLD As String = "U28"
 Private Const PICKER_NEW As String = "V13"
 Private Const SELF As String = "modInstallUpdate"
 Private Const RESET_LINE As String = _
-    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, W5:AB10"").Value = """""
+    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, W6:AB11"").Value = """""
 
 '------------------------------------------------------------------
 ' STEP 1 - the code
@@ -359,7 +359,7 @@ Public Sub InstallUpdate_Step2()
     ' The panel: a column-header row like the counterparty table's (row 17)
     ' and five input rows, rows 5-10 beside the Alert Related Information
     ' rows.
-    stepName = "building the panel (V5:AB10)"
+    stepName = "building the panel (V5:AB11)"
     ' Narrow gaps either side of the form and a narrower address column and
     ' panel, so the whole sheet fits the window at a larger zoom.
     ws.Columns("V:AB").Hidden = False
@@ -375,8 +375,8 @@ Public Sub InstallUpdate_Step2()
     For c = 1 To 5
         ws.Cells(5, 23 + c).Value = "CP " & c
     Next c
-    labels = Array("Negative News", "Other Address 1", "Other Address 2", "Other Address 3", "Phone / Email")
-    For c = 0 To 4
+    labels = Array("Negative News", "Other Address 1", "Other Address 2", "Other Address 3", "Phone", "Email")
+    For c = 0 To 5
         ws.Cells(6 + c, 22).Value = labels(c)
     Next c
     InputTip ws.Range("W6:AB6"), "Negative News", _
@@ -384,10 +384,20 @@ Public Sub InstallUpdate_Step2()
         "or suffixes, as the procedure asks - or type the name to search."
     InputTip ws.Range("W7:AB9"), "Other Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
-    InputTip ws.Range("W10:AB10"), "Phone / Email", _
-        "Each gets its own search. Several? Separate them with ;"
+    InputTip ws.Range("W10:AB10"), "Phone", _
+        "Each number gets its own search. Several? Separate them with ;"
+    InputTip ws.Range("W11:AB11"), "Email", _
+        "Each email address gets its own search. Several? Separate them with ;"
     ' One readable text size for the whole form and panel (it was 8 to 9).
-    ws.Range("G5:T10,G13:T14,G17:T22,G26:T27,V5:AB10,V13").Font.Size = 10
+    ws.Range("G5:T10,G13:T14,G17:T22,G26:T27,V5:AB11,V13").Font.Size = 10
+
+    ' Risk colours on the country risk cells (PDF Risk Class R27, Excel Risk
+    ' Class T27): solid fills with their own text colour, so they read the
+    ' same in every theme. They were faint dotted fills under the theme's
+    ' text colour - Medium came out yellow on yellow.
+    stepName = "colouring the country risk cells"
+    RiskColours ws.Range("R27:S27")
+    RiskColours ws.Range("T27")
 
     stepName = "moving the theme picker to " & PICKER_NEW
     ws.Range(PICKER_NEW).Value = themeVal
@@ -421,7 +431,7 @@ Public Sub InstallUpdate_Step2()
     Application.Run "FitSheet1ToWindow"
     On Error GoTo 0
 
-    MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB10 and the theme picker " & _
+    MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB11 and the theme picker " & _
         "in V13, both under banners like the form's; row 23 hidden; text at one size; Sheet7 and " & _
         "Search Matrix on 5 counterparties." & vbCrLf & vbCrLf & _
         IIf(pickerErr = "", "", "The theme dropdown couldn't be added (" & pickerErr & "). Run " & _
@@ -441,6 +451,26 @@ Fail:
         "Error " & errNum & ": " & errDesc & vbCrLf & vbCrLf & _
         "Run InstallUpdate_Step2 again once that's sorted (it's safe to re-run).", _
         vbExclamation, "Install Update"
+End Sub
+
+' Prohibited, High, Medium, Low and N/A as solid fills with readable text.
+Private Sub RiskColours(ByVal rng As Range)
+    Dim levels As Variant, lv As Variant, fc As Object
+    rng.FormatConditions.Delete
+    levels = Array( _
+        Array("Prohibited", RGB(112, 0, 0), RGB(255, 255, 255)), _
+        Array("High", RGB(192, 0, 0), RGB(255, 255, 255)), _
+        Array("Medium", RGB(255, 192, 0), RGB(0, 0, 0)), _
+        Array("Low", RGB(0, 128, 64), RGB(255, 255, 255)), _
+        Array("N/A", RGB(128, 128, 128), RGB(255, 255, 255)))
+    For Each lv In levels
+        Set fc = rng.FormatConditions.Add(Type:=xlTextString, String:=lv(0), TextOperator:=xlContains)
+        fc.Interior.Pattern = xlSolid
+        fc.Interior.Color = lv(1)
+        fc.Font.Color = lv(2)
+        fc.Font.Bold = True
+        fc.StopIfTrue = True
+    Next lv
 End Sub
 
 ' Puts the theme list on the picker cell; "" if it worked, otherwise why
