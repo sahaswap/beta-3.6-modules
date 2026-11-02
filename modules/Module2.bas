@@ -4012,6 +4012,34 @@ Public Sub StyleOsddInputs()
     Application.EnableEvents = evts
 End Sub
 
+' Search Matrix (laid out by modInstallUpdate) has a 13-row block per
+' entity - the customer, then counterparties 1-5 - and rows 4-11 of each
+' block are the panel's extra searches (other addresses, phone, email).
+' Shows those rows that have something to search, hides the rest, and
+' rebuilds the links. Sheet1's Worksheet_Change runs it when the panel or
+' a name changes.
+Public Sub RefreshOsddMatrix()
+    Dim sm As Worksheet, b As Long, r As Long, wasProt As Boolean, evts As Boolean
+
+    On Error Resume Next
+    Set sm = ThisWorkbook.Sheets("Search Matrix")
+    If sm Is Nothing Then Exit Sub
+    If CStr(sm.Range("B5").Value) <> "Other Address 1" Then Exit Sub    ' not laid out
+    evts = Application.EnableEvents
+    Application.EnableEvents = False
+    wasProt = sm.ProtectContents
+    If wasProt Then sm.Unprotect Password:="p7ss"
+    sm.Calculate
+    For b = 0 To 5
+        For r = 2 + b * 13 + 3 To 2 + b * 13 + 10
+            sm.Rows(r).Hidden = (CStr(sm.Range("F" & r).Value) = "")
+        Next r
+    Next b
+    If wasProt Then sm.Protect Password:="p7ss"
+    Application.EnableEvents = evts
+    Application.Run "RefreshSearchMatrixHyperlinks"
+End Sub
+
 ' Zooms Sheet1 so all of it - A2:AB28, the rows below are hidden - fits
 ' the Excel window without scrolling. Excel works the percentage out for
 ' the screen it is on, so it is run on opening the workbook
@@ -4054,6 +4082,7 @@ Private Sub CopyLook(ByVal src As Range, ByVal dst As Range)
         .Color = src.Font.Color
         .Bold = src.Font.Bold
         .Italic = src.Font.Italic
+        .Underline = src.Font.Underline
     End With
     CopyEdge src.Borders(xlEdgeTop), dst, xlEdgeTop
     CopyEdge src.Borders(xlEdgeBottom), dst, xlEdgeBottom

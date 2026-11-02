@@ -82,6 +82,16 @@ Private Sub Worksheet_Change(ByVal target As Range)
     stepName = "1. Unprotecting Workbook and Sheet"
     ThisWorkbook.Unprotect Password:="p7ss"
     Me.Unprotect Password:="p7ss"
+    ' OSDD panel (Module2): an email typed there turns into a link and
+    ' takes the link style - put the panel's look back - and Search
+    ' Matrix shows the extra searches the panel now asks for.
+    If Not Intersect(target, Me.Range("W6:AB11")) Is Nothing Then
+        Intersect(target, Me.Range("W6:AB11")).Hyperlinks.Delete
+        Application.Run "StyleOsddInputs"
+    End If
+    If Not Intersect(target, Me.Range("W6:AB11,J13:J14,J18:J22,T18:T22")) Is Nothing Then
+        Application.Run "RefreshOsddMatrix"
+    End If
     LogDebug "After Unprotect - Sheet Protected: " & Me.ProtectContents & ", Workbook Protected: " & ThisWorkbook.ProtectStructure
 
     ' --- 1. DEFINE YOUR RANGES ---

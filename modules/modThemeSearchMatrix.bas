@@ -21,7 +21,7 @@ Option Explicit
 ' reads as one titled band.
 '=====================================================================
 Private Const SHEET_NAME As String = "Search Matrix"
-Private Const BLOCK As Long = 5          ' rows per entity block
+Private Const BLOCK As Long = 13         ' rows per entity block
 
 ' --- palette (from Sheet1) ---
 Private Function NAVY() As Long:       NAVY = RGB(34, 52, 86):        End Function   ' #223456

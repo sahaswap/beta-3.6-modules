@@ -496,13 +496,13 @@ Private Sub ApplySearchMatrix()
         ' Banded per 5-row entity block, not per row - the data is one
         ' entity per block, so row striping would fight the grouping.
         For r = 2 To lastRow
-            blk = (r - 2) \ 5
+            blk = (r - 2) \ 13                      ' 13-row block per entity
             PaintCells ws.Range("A" & r & ":E" & r), _
                 IIf(blk Mod 2 = 0, cRock, cSlab)
             With ws.Range("A" & r & ":E" & r).Borders(xlEdgeBottom)
                 .LineStyle = xlContinuous: .Weight = xlHairline: .Color = cSeam
             End With
-            If (r - 1) Mod 5 = 0 Then
+            If (r - 1) Mod 13 = 0 Then
                 With ws.Range("A" & r & ":E" & r).Borders(xlEdgeBottom)
                     .LineStyle = xlContinuous: .Weight = xlThin: .Color = cSeam
                 End With

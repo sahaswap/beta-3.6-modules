@@ -550,7 +550,7 @@ Private Sub ApplySearchMatrix()
         End With
 
         For r = 2 To lastRow
-            blk = (r - 2) \ 5                       ' 0 = Customer, 1 = CP1, ...
+            blk = (r - 2) \ 13                      ' 0 = Customer, 1 = CP1, ... (13 rows each)
             PaintCells ws.Range("A" & r & ":E" & r), _
                 IIf(blk Mod 2 = 0, cPanel, cSlab)
             With ws.Range("A" & r & ":E" & r).Borders(xlEdgeBottom)
@@ -558,7 +558,7 @@ Private Sub ApplySearchMatrix()
             End With
             ' the last row of each entity block gets a lit divider, so the
             ' groups read even where two same-shade blocks meet
-            If (r - 1) Mod 5 = 0 Then
+            If (r - 1) Mod 13 = 0 Then
                 With ws.Range("A" & r & ":E" & r).Borders(xlEdgeBottom)
                     .LineStyle = xlContinuous: .Weight = xlThin: .Color = cTrace
                 End With

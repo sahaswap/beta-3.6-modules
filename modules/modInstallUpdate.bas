@@ -28,7 +28,7 @@ Attribute VB_Name = "modInstallUpdate"
 '     one readable size, so Sheet1 fits at a larger zoom; row 23 (the old
 '     Counterparty 6) emptied, locked and hidden
 '   - Sheet7's [Counterparties] tag on CP1-5 and [CP 6] emptied; Search
-'     Matrix's Counterparty 6 rows hidden
+'     Matrix rebuilt with every search OSDD Search runs (BuildOsddSearchMatrix)
 '   - the current theme applied again, Sheet1 fitted to the window
 '==================================================================
 Option Explicit
@@ -37,6 +37,10 @@ Private Const PWD As String = "p7ss"
 Private Const PICKER_OLD As String = "U28"
 Private Const PICKER_NEW As String = "V13"
 Private Const SELF As String = "modInstallUpdate"
+' The procedure's Negative News string, in two parts: a formula's text
+' can only be 255 characters at a time.
+Private Const NEG1 As String = """ AND (arrest OR corruption OR sentencing OR money laundering OR AML OR launder OR embezzle OR evas OR evad OR crime OR corrupt OR bribe OR theft OR extort OR drug OR traffic OR trafficking OR felony OR sanction OR counterfeit OR terror OR """
+Private Const NEG2 As String = """investigat*, indict*, charge?, court, lawsuit, judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"""
 Private Const RESET_LINE As String = _
     "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, W6:AB11"").Value = """""
 
@@ -200,12 +204,18 @@ Private Function PatchCode(ByVal proj As Object) As String
     Dim nPicker As Long, nReset As Long, nResetDone As Long, nNarr As Long, nRenLoop As Long
     Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long, nNavy As Long
     Dim nNavyBtn As Long, nNavyTitle As Long, hasFindButton As Boolean
+    Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean
     Dim openNote As String, out As String
 
     For Each comp In proj.VBComponents
         If comp.Name <> SELF And Left$(comp.Name, 10) <> "zOldModule" Then
             Set cm = comp.CodeModule
             hasFindButton = False
+            needSheetHook = False
+            If cm.CountOfLines > 0 Then
+                needSheetHook = InStr(cm.Lines(1, cm.CountOfLines), "Sub Worksheet_Change(") > 0 And _
+                    InStr(cm.Lines(1, cm.CountOfLines), "RefreshOsddMatrix") = 0 And comp.Type = 100
+            End If
             If cm.CountOfLines > 0 Then hasFindButton = (InStr(cm.Lines(1, cm.CountOfLines), "Private Function FindButton(") > 0)
             i = 1
             Do While i <= cm.CountOfLines
@@ -254,6 +264,25 @@ Private Function PatchCode(ByVal proj As Object) As String
                 ElseIf InStr(ln, "Characters.text = ""Beta 3.5""") > 0 Then
                     cm.ReplaceLine i, Replace(ln, """Beta 3.5""", """Beta 3.6.1""")
                     nNavyTitle = nNavyTitle + 1
+                ElseIf Left$(t, 30) = "Private Const BLOCK As Long = " And InStr(t, "= 5 ") > 0 Then
+                    ' Navy & Gold's Search Matrix bands one entity block at a time.
+                    cm.ReplaceLine i, Replace(ln, "= 5 ", "= 13")
+                    nBlock = nBlock + 1
+                ElseIf needSheetHook And t = "Me.Unprotect Password:=""p7ss""" Then
+                    cm.InsertLines i + 1, _
+                        ind & "' OSDD panel (Module2): an email typed there turns into a link and" & vbCrLf & _
+                        ind & "' takes the link style - put the panel's look back - and Search" & vbCrLf & _
+                        ind & "' Matrix shows the extra searches the panel now asks for." & vbCrLf & _
+                        ind & "If Not Intersect(target, Me.Range(""W6:AB11"")) Is Nothing Then" & vbCrLf & _
+                        ind & "    Intersect(target, Me.Range(""W6:AB11"")).Hyperlinks.Delete" & vbCrLf & _
+                        ind & "    Application.Run ""StyleOsddInputs""" & vbCrLf & _
+                        ind & "End If" & vbCrLf & _
+                        ind & "If Not Intersect(target, Me.Range(""W6:AB11,J13:J14,J18:J22,T18:T22"")) Is Nothing Then" & vbCrLf & _
+                        ind & "    Application.Run ""RefreshOsddMatrix""" & vbCrLf & _
+                        ind & "End If"
+                    needSheetHook = False
+                    nSheetHook = nSheetHook + 1
+                    i = i + 10
                 ElseIf t = "InStr(1, txt, ""OSDD"", vbTextCompare) > 0 Or _" Then
                     ' Navy & Gold takes any shape saying OSDD for a button; the
                     ' OSDD Search Inputs banner is not one.
@@ -292,6 +321,8 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nNavy, 1, "Navy & Gold styles the OSDD Search Inputs banner as a banner")
     out = out & Item(nNavyBtn, 1, "Navy & Gold moves only shapes with a macro as buttons")
     out = out & Item(nNavyTitle, 1, "Navy & Gold title: Beta 3.6.1")
+    out = out & Item(nBlock, 1, "Navy & Gold Search Matrix: one band per entity")
+    out = out & Item(nSheetHook, 1, "Sheet1's code: panel edits restyle the panel and update Search Matrix")
     out = out & "   ThisWorkbook fits Sheet1 on opening: " & openNote & vbCrLf
     PatchCode = out
 End Function
@@ -410,13 +441,10 @@ Public Sub InstallUpdate_Step2()
     f = ws7.Range("K8").Formula
     If InStr(f, "J18:J23") > 0 Then ws7.Range("K8").Formula = Replace(f, "J18:J23", "J18:J22")
     If InStr(ws7.Range("K22").Formula, "J23") > 0 Then ws7.Range("K22").Formula = "="""""
-    Set sm = ThisWorkbook.Sheets("Search Matrix")
-    If InStr(sm.Range("A32").Formula, "$J$23") > 0 Then
-        smProt = sm.ProtectContents
-        If smProt Then sm.Unprotect Password:=PWD
-        sm.Rows("32:36").Hidden = True
-        If smProt Then sm.Protect Password:=PWD
-    End If
+    On Error GoTo Fail
+    stepName = "rebuilding Search Matrix"
+    BuildOsddSearchMatrix
+    On Error Resume Next
 
     ws.Protect Password:=PWD
     If wbProt Then ThisWorkbook.Protect Password:=PWD, Structure:=True, Windows:=False
@@ -428,6 +456,7 @@ Public Sub InstallUpdate_Step2()
     ' the panel's cells take its colours and Sheet1 is fitted to the window.
     Application.Run "ApplyThemeByKey", key
     Application.Run "StyleOsddInputs"
+    Application.Run "RefreshOsddMatrix"
     Application.Run "FitSheet1ToWindow"
     On Error GoTo 0
 
@@ -451,6 +480,93 @@ Fail:
         "Error " & errNum & ": " & errDesc & vbCrLf & vbCrLf & _
         "Run InstallUpdate_Step2 again once that's sorted (it's safe to re-run).", _
         vbExclamation, "Install Update"
+End Sub
+
+' Search Matrix rebuilt as one 13-row block per entity - the customer,
+' then counterparties 1-5 - with every search OSDD Search runs: name,
+' address, name + address, the panel's three other addresses (each on its
+' own and with the name), phone, email, and Negative News pages 1 and 2,
+' which use the panel's Negative News name when it has one. Page 2 now
+' starts at result 11 (&start=10), as OSDD Search's does. Rows with
+' nothing to search are hidden by Module2's RefreshOsddMatrix.
+Private Sub BuildOsddSearchMatrix()
+    Dim sm As Worksheet, smProt As Boolean, b As Long, k As Long, r As Long, s As Long
+    Dim nm As String, ad As String, pc As String, ent As String, lbl As String
+    Dim kinds As Variant, fileKinds As Variant, panelCols As Variant, q As String, oa As String
+
+    Set sm = ThisWorkbook.Sheets("Search Matrix")
+    smProt = sm.ProtectContents
+    If smProt Then sm.Unprotect Password:=PWD
+
+    sm.Rows("2:200").Hidden = False
+    On Error Resume Next
+    sm.Range("E2:E200").Hyperlinks.Delete
+    On Error GoTo 0
+    sm.Range("A2:N200").ClearContents
+    sm.Range("A2:N2").Copy
+    sm.Range("A3:N79").PasteSpecial Paste:=xlPasteFormats
+    Application.CutCopyMode = False
+
+    kinds = Array("Google name", "Address", "Name + Address", "Other Address 1", "Name + Other Address 1", _
+        "Other Address 2", "Name + Other Address 2", "Other Address 3", "Name + Other Address 3", _
+        "Phone", "Email", "Negative News, page 1", "Negative News, page 2")
+    fileKinds = Array("Google", "Address", "Google+Address", "Address 2", "Google+Address 2", _
+        "Address 3", "Google+Address 3", "Address 4", "Google+Address 4", _
+        "Telephone", "Email", "Negative News 1", "Negative News 2")
+    panelCols = Array("W", "X", "Y", "Z", "AA", "AB")
+
+    For b = 0 To 5
+        s = 2 + b * 13
+        pc = "Sheet1!$" & panelCols(b) & "$"
+        If b = 0 Then
+            nm = "Sheet1!$J$13": ad = "Sheet1!$J$14": ent = "Customer"
+            lbl = "=IF(" & nm & "="""",""Customer""," & nm & "&"" (Customer)"")"
+        Else
+            nm = "Sheet1!$J$" & (17 + b): ad = "Sheet1!$T$" & (17 + b): ent = "CP" & b
+            lbl = "=IF(" & nm & "="""",""Counterparty " & b & """," & nm & "&"" (CP" & b & ")"")"
+        End If
+        For k = 0 To 12
+            r = s + k
+            Select Case k
+                Case 0: q = "=IF(" & nm & "="""",""""," & nm & ")"
+                Case 1: q = "=IF(" & ad & "="""",""""," & ad & ")"
+                Case 2: q = "=IF(OR(" & nm & "=""""," & ad & "=""""),""""," & nm & "&"" + ""&" & ad & ")"
+                Case 3, 5, 7
+                    oa = pc & (7 + (k - 3) \ 2)
+                    q = "=IF(OR(" & nm & "=""""," & oa & "=""""),""""," & oa & ")"
+                Case 4, 6, 8
+                    oa = pc & (7 + (k - 4) \ 2)
+                    q = "=IF(OR(" & nm & "=""""," & oa & "=""""),""""," & nm & "&"" + ""&" & oa & ")"
+                Case 9
+                    q = "=IF(OR(" & nm & "=""""," & pc & "10=""""),"""",SUBSTITUTE(SUBSTITUTE(TRIM(" & pc & _
+                        "10),""; "","";""),"";"","" OR ""))"
+                Case 10
+                    q = "=IF(OR(" & nm & "=""""," & pc & "11=""""),"""",CHAR(34)&SUBSTITUTE(SUBSTITUTE(TRIM(" & _
+                        pc & "11),""; "","";""),"";"",CHAR(34)&"" OR ""&CHAR(34))&CHAR(34))"
+                Case 11, 12
+                    q = "=IF(" & nm & "="""","""",CHAR(34)&IF(" & pc & "6=""""," & nm & "," & pc & "6)&CHAR(34)&" & _
+                        NEG1 & "&" & NEG2 & ")"
+            End Select
+            sm.Range("A" & r).Formula = lbl
+            sm.Range("B" & r).Value = kinds(k)
+            sm.Range("C" & r).Formula = "=IF(L" & r & "="""","""",L" & r & ")"
+            sm.Range("D" & r).Formula = "=IF(F" & r & "="""","""",Sheet1!$J$9&""_""&Sheet1!$J$10&""_" & ent & _
+                "_""&N" & r & "&""_" & fileKinds(k) & ".pdf"")"
+            sm.Range("F" & r).Formula = q
+            sm.Range("G" & r).Formula = "=IF(F" & r & "="""","""",SUBSTITUTE(F" & r & ",CHAR(34),""%22""))"
+            sm.Range("H" & r).Formula = "=IF(G" & r & "="""","""",SUBSTITUTE(G" & r & ",""&"",""%26""))"
+            sm.Range("I" & r).Formula = "=IF(H" & r & "="""","""",SUBSTITUTE(H" & r & ",""("",""%28""))"
+            sm.Range("J" & r).Formula = "=IF(I" & r & "="""","""",SUBSTITUTE(I" & r & ","")"",""%29""))"
+            sm.Range("K" & r).Formula = "=IF(J" & r & "="""","""",SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(J" & r & _
+                ",""+"",""%2B""),""#"",""%23""),"" "",""+""))"
+            sm.Range("L" & r).Formula = "=IF(K" & r & "="""","""",""https://www.google.com/search?q=""&K" & r & _
+                "&""&num=100&hl=en" & IIf(k = 12, "&start=10", "") & """)"
+            sm.Range("M" & r).Formula = "=IF(F" & r & "="""",0,1)"
+            sm.Range("N" & r).Formula = "=SUM($M$" & s & ":M" & r & ")"
+        Next k
+    Next b
+    sm.Calculate
+    If smProt Then sm.Protect Password:=PWD
 End Sub
 
 ' Prohibited, High, Medium, Low and N/A as solid fills with readable text.
