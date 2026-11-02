@@ -6,7 +6,8 @@ Attribute VB_Name = "modInstallUpdate"
 ' Needs "Trust access to the VBA project object model" (File > Options >
 ' Trust Center > Trust Center Settings > Macro Settings), and one folder
 ' holding the new module files: Module2.bas, modTronLegacy.bas,
-' modThemeManager.bas and modDesert.bas.
+' modThemeManager.bas and modDesert.bas (one left out keeps the
+' workbook's own copy, if it has one).
 '
 ' Step 1, the code:
 '   - replaces OSDD Search (Module2), the Dark Blue theme (Module13), the
@@ -71,8 +72,14 @@ Sub InstallUpdate()
     files = Array("Module2.bas", "modTronLegacy.bas", "modThemeManager.bas", "modDesert.bas")
     names = Array("Module2", "modTronLegacy", "modThemeManager", "modDesert")
     marks = Array("Sub SearchAndSavePDF_Direct(", "Sub ApplyTronLegacy(", "Sub ApplyThemeByKey(", "Sub ApplyDesert(")
+    ' A file left out of the folder keeps the workbook's own copy of that
+    ' module - fine when it has not changed since the last update.
     For i = 0 To UBound(files)
-        copies(i) = PrepareFile(folder & files(i), CStr(names(i)), CStr(marks(i)), problem)
+        If Dir$(folder & files(i)) = "" And HasModule(proj, CStr(marks(i))) Then
+            log = log & "   kept the workbook's " & names(i) & " (not in the folder)" & vbCrLf
+        Else
+            copies(i) = PrepareFile(folder & files(i), CStr(names(i)), CStr(marks(i)), problem)
+        End If
     Next i
     If problem <> "" Then
         MsgBox "Nothing was changed - fix these first:" & vbCrLf & problem, vbExclamation, "Install Update"
@@ -88,10 +95,12 @@ Sub InstallUpdate()
                 Case Else
                     If comp.Type = 1 And comp.CodeModule.CountOfLines > 0 Then    ' standard module
                         code = comp.CodeModule.Lines(1, comp.CodeModule.CountOfLines)
-                        If InStr(code, "Sub SearchAndSavePDF_Direct(") > 0 Or _
-                           InStr(code, "Sub ApplyTronLegacy(") > 0 Or _
-                           InStr(code, "Sub ApplyThemeByKey(") > 0 Or _
-                           InStr(code, "Sub ApplyDesert(") > 0 Then removeList.Add comp
+                        For i = 0 To UBound(marks)
+                            If copies(i) <> "" And InStr(code, marks(i)) > 0 Then
+                                removeList.Add comp
+                                Exit For
+                            End If
+                        Next i
                     End If
             End Select
         End If
@@ -111,8 +120,10 @@ Sub InstallUpdate()
     Next comp
 
     For i = 0 To UBound(files)
-        Set comp = proj.VBComponents.Import(copies(i))
-        log = log & "   imported " & comp.Name & vbCrLf
+        If copies(i) <> "" Then
+            Set comp = proj.VBComponents.Import(copies(i))
+            log = log & "   imported " & comp.Name & vbCrLf
+        End If
     Next i
 
     log = log & PatchCode(proj)
@@ -165,6 +176,21 @@ Private Function PrepareFile(ByVal path As String, ByVal modName As String, ByVa
     Put #fh, , s
     Close #fh
     PrepareFile = outPath
+End Function
+
+' Whether a standard module (other than this one) holds the line mark.
+Private Function HasModule(ByVal proj As Object, ByVal mark As String) As Boolean
+    Dim comp As Object
+    For Each comp In proj.VBComponents
+        If comp.Name <> SELF And comp.Type = 1 Then
+            If comp.CodeModule.CountOfLines > 0 Then
+                If InStr(comp.CodeModule.Lines(1, comp.CodeModule.CountOfLines), mark) > 0 Then
+                    HasModule = True
+                    Exit Function
+                End If
+            End If
+        End If
+    Next comp
 End Function
 
 ' The single-line changes, in whichever module holds each line.
