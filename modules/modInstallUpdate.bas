@@ -41,6 +41,7 @@ Private Const SELF As String = "modInstallUpdate"
 ' can only be 255 characters at a time.
 Private Const NEG1 As String = """ AND (arrest OR corruption OR sentencing OR money laundering OR AML OR launder OR embezzle OR evas OR evad OR crime OR corrupt OR bribe OR theft OR extort OR drug OR traffic OR trafficking OR felony OR sanction OR counterfeit OR terror OR """
 Private Const NEG2 As String = """investigat*, indict*, charge?, court, lawsuit, judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"""
+Private Const SHEET_HOOK_MARK As String = "' (Search Matrix brings its links up to date when it is opened.)"
 Private Const RESET_LINE As String = _
     "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, W6:AB11"").Value = """""
 
@@ -212,9 +213,11 @@ Private Function PatchCode(ByVal proj As Object) As String
             Set cm = comp.CodeModule
             hasFindButton = False
             needSheetHook = False
-            If cm.CountOfLines > 0 Then
+            If cm.CountOfLines > 0 And comp.Type = 100 Then
+                ' Sheet1's change handler: add the panel hook, or swap the
+                ' earlier, slower one (it refreshed Search Matrix on every edit).
                 needSheetHook = InStr(cm.Lines(1, cm.CountOfLines), "Sub Worksheet_Change(") > 0 And _
-                    InStr(cm.Lines(1, cm.CountOfLines), "RefreshOsddMatrix") = 0 And comp.Type = 100
+                    InStr(cm.Lines(1, cm.CountOfLines), SHEET_HOOK_MARK) = 0
             End If
             If cm.CountOfLines > 0 Then hasFindButton = (InStr(cm.Lines(1, cm.CountOfLines), "Private Function FindButton(") > 0)
             i = 1
@@ -268,21 +271,20 @@ Private Function PatchCode(ByVal proj As Object) As String
                     ' Navy & Gold's Search Matrix bands one entity block at a time.
                     cm.ReplaceLine i, Replace(ln, "= 5 ", "= 13")
                     nBlock = nBlock + 1
-                ElseIf needSheetHook And t = "Me.Unprotect Password:=""p7ss""" Then
-                    cm.InsertLines i + 1, _
-                        ind & "' OSDD panel (Module2): an email typed there turns into a link and" & vbCrLf & _
-                        ind & "' takes the link style - put the panel's look back - and Search" & vbCrLf & _
-                        ind & "' Matrix shows the extra searches the panel now asks for." & vbCrLf & _
-                        ind & "If Not Intersect(target, Me.Range(""W6:AB11"")) Is Nothing Then" & vbCrLf & _
-                        ind & "    Intersect(target, Me.Range(""W6:AB11"")).Hyperlinks.Delete" & vbCrLf & _
-                        ind & "    Application.Run ""StyleOsddInputs""" & vbCrLf & _
-                        ind & "End If" & vbCrLf & _
-                        ind & "If Not Intersect(target, Me.Range(""W6:AB11,J13:J14,J18:J22,T18:T22"")) Is Nothing Then" & vbCrLf & _
-                        ind & "    Application.Run ""RefreshOsddMatrix""" & vbCrLf & _
-                        ind & "End If"
+                ElseIf needSheetHook And t = "' OSDD panel (Module2): an email typed there turns into a link and" Then
+                    ' The earlier hook (10 lines): replace it.
+                    cm.DeleteLines i, 10
+                    cm.InsertLines i, SheetHook(ind)
                     needSheetHook = False
                     nSheetHook = nSheetHook + 1
-                    i = i + 10
+                    i = i + 7
+                ElseIf needSheetHook And t = "Me.Unprotect Password:=""p7ss""" Then
+                    If InStr(cm.Lines(1, cm.CountOfLines), "' OSDD panel (Module2): an email typed there turns into a link and") = 0 Then
+                        cm.InsertLines i + 1, SheetHook(ind)
+                        needSheetHook = False
+                        nSheetHook = nSheetHook + 1
+                        i = i + 8
+                    End If
                 ElseIf t = "InStr(1, txt, ""OSDD"", vbTextCompare) > 0 Or _" Then
                     ' Navy & Gold takes any shape saying OSDD for a button; the
                     ' OSDD Search Inputs banner is not one.
@@ -345,10 +347,26 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nNavyBtn, 1, "Navy & Gold moves only shapes with a macro as buttons")
     out = out & Item(nNavyTitle, 1, "Navy & Gold title: Beta 3.6.1")
     out = out & Item(nBlock, 1, "Navy & Gold Search Matrix: one band per entity")
-    out = out & Item(nSheetHook, 1, "Sheet1's code: panel edits restyle the panel and update Search Matrix")
+    out = out & Item(nSheetHook, 1, "Sheet1's code: a link Excel makes of a typed email is taken off")
     out = out & "   ThisWorkbook fits Sheet1 on opening: " & openNote & vbCrLf
     out = out & "   Search Matrix refreshes its links when opened: " & smNote & vbCrLf
     PatchCode = out
+End Function
+
+' The lines Sheet1's Worksheet_Change gets, indented by ind. Only an edit
+' that left a link behind (an email Excel turned into one) costs anything;
+' Search Matrix brings its own links up to date when it is opened.
+Private Function SheetHook(ByVal ind As String) As String
+    SheetHook = _
+        ind & "' OSDD panel (Module2): an email typed there turns into a link and takes" & vbCrLf & _
+        ind & "' the link style - take the link off and put the panel's look back." & vbCrLf & _
+        ind & SHEET_HOOK_MARK & vbCrLf & _
+        ind & "If Not Intersect(target, Me.Range(""W6:AB11"")) Is Nothing Then" & vbCrLf & _
+        ind & "    If Intersect(target, Me.Range(""W6:AB11"")).Hyperlinks.Count > 0 Then" & vbCrLf & _
+        ind & "        Intersect(target, Me.Range(""W6:AB11"")).Hyperlinks.Delete" & vbCrLf & _
+        ind & "        Application.Run ""StyleOsddInputs""" & vbCrLf & _
+        ind & "    End If" & vbCrLf & _
+        ind & "End If"
 End Function
 
 Private Function Item(ByVal got As Long, ByVal expected As Long, ByVal what As String) As String
