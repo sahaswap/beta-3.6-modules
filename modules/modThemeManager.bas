@@ -562,19 +562,23 @@ Private Sub RestoreSheet1Baseline()
         Next k
     Next shp
 
-    ' With the OSDD inputs beside the tables (columns V:AB), the Alert
-    ' Related Information and Counterparty Information banners run across
-    ' to AB, over the widened Alert rows and the counterparty inputs'
-    ' headers, and Country Risk Rating over its widened rows. Earlier
-    ' banner copies (the old panel's and picker's) go.
+    ' With the OSDD inputs beside the tables (columns V:AB): Alert Related
+    ' Information and Country Risk Rating run across to AB over their
+    ' widened rows; Customer Information and Counterparty Information keep
+    ' to G:U, each with a matching copy beside it over the inputs -
+    ' "Customer OSDD Inputs" and "Counterparty OSDD Inputs". Copies from
+    ' earlier layouts go.
     ws.Shapes("Rectangle: Single Corner Snipped OSDD").Delete
     ws.Shapes("Rectangle: Single Corner Snipped Theme").Delete
-    ws.Shapes("OSDD Banner Customer").Delete
-    ws.Shapes("OSDD Banner Counterparty").Delete
-    If Left$(CStr(ws.Range("W12").Value), 13) = "Negative News" Then
+    If Left$(CStr(ws.Range("W13").Value), 13) = "Negative News" Then
         StretchBanner ws, "Alert Related Information", "AB"
-        StretchBanner ws, "Counterparty Information", "AB"
         StretchBanner ws, "Country Risk Rating", "AB"
+        MatchBanner ws, "Counterparty Information", "Customer Information"
+        PlaceBanner ws, "Customer Information", "OSDD Banner Customer", "Customer OSDD Inputs", "V", "AB"
+        PlaceBanner ws, "Counterparty Information", "OSDD Banner Counterparty", "Counterparty OSDD Inputs", "V", "AB"
+    Else
+        ws.Shapes("OSDD Banner Customer").Delete
+        ws.Shapes("OSDD Banner Counterparty").Delete
     End If
     Application.ScreenUpdating = False
 
@@ -613,6 +617,52 @@ Private Sub StretchBanner(ByVal ws As Worksheet, ByVal txt As String, ByVal last
     For k = 1 To 3
         shp.Width = W
         If Abs(shp.Width - W) < 1 Then Exit For
+        DoEvents
+    Next k
+End Sub
+
+' Gives the banner saying txt the same left and width as the one saying
+' refTxt (Counterparty Information back to Customer Information's G:U,
+' after an earlier layout stretched it).
+Private Sub MatchBanner(ByVal ws As Worksheet, ByVal txt As String, ByVal refTxt As String)
+    Dim shp As Shape, ref As Shape
+    On Error Resume Next
+    Set shp = PlainBanner(ws, txt)
+    Set ref = PlainBanner(ws, refTxt)
+    If shp Is Nothing Or ref Is Nothing Then Exit Sub
+    shp.Left = ref.Left
+    shp.Width = ref.Width
+End Sub
+
+' A copy of the banner shape saying srcText, named nm and saying txt,
+' over columns firstCol:lastCol with the original's top, height and side
+' inset. Narrowed before it moves and checked after, in case Excel holds
+' it short of where it was put.
+Private Sub PlaceBanner(ByVal ws As Worksheet, ByVal srcText As String, ByVal nm As String, _
+    ByVal txt As String, ByVal firstCol As String, ByVal lastCol As String)
+    Dim src As Shape, shp As Shape, inset As Single, L As Single, W As Single, k As Long
+
+    On Error Resume Next
+    ws.Shapes(nm).Delete
+    Set src = PlainBanner(ws, srcText)
+    If src Is Nothing Then Exit Sub
+    inset = src.Left - ws.Range("G1").Left
+    If inset < 0 Then inset = 0
+    L = ws.Range(firstCol & "1").Left + inset
+    W = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - L
+
+    Set shp = src.Duplicate
+    shp.Name = nm
+    shp.AlternativeText = ""
+    shp.TextFrame2.TextRange.Text = txt
+    shp.Placement = xlMove
+    For k = 1 To 3
+        shp.Width = 10
+        shp.Left = L
+        shp.Top = src.Top
+        shp.Height = src.Height
+        shp.Width = W
+        If Abs(shp.Left - L) < 1 And Abs(shp.Width - W) < 1 Then Exit For
         DoEvents
     Next k
 End Sub

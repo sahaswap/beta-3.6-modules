@@ -82,12 +82,12 @@ Private Sub Worksheet_Change(ByVal target As Range)
     stepName = "1. Unprotecting Workbook and Sheet"
     ThisWorkbook.Unprotect Password:="p7ss"
     Me.Unprotect Password:="p7ss"
-    ' OSDD inputs (Module2): an email typed there turns into a link and takes
-    ' the link style - take the link off and put the inputs' look back.
-    ' (Inputs V13:AB13, V18:AB22. Search Matrix updates its links when opened.)
-    If Not Intersect(target, Me.Range("V13:AB13,V18:AB22")) Is Nothing Then
-        If Intersect(target, Me.Range("V13:AB13,V18:AB22")).Hyperlinks.Count > 0 Then
-            Intersect(target, Me.Range("V13:AB13,V18:AB22")).Hyperlinks.Delete
+    ' OSDD inputs (Module2): a typed email turns into a link and takes the
+    ' link style - take the link off and put the inputs' look back.
+    ' (Inputs V14:AB14, V18:AB22. Search Matrix updates its links when opened.)
+    If Not Intersect(target, Me.Range("V14:AB14,V18:AB22")) Is Nothing Then
+        If Intersect(target, Me.Range("V14:AB14,V18:AB22")).Hyperlinks.Count > 0 Then
+            Intersect(target, Me.Range("V14:AB14,V18:AB22")).Hyperlinks.Delete
             Application.Run "StyleOsddInputs"
         End If
     End If

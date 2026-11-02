@@ -134,7 +134,7 @@ Private Const CP_FIRST_ROW As Long = 18
 Private Const CP_LAST_ROW As Long = 22
 ' The customer's row of OSDD inputs on Sheet1 (counterparties' are on
 ' their own rows); see StyleOsddInputs.
-Private Const OSDD_CUST_ROW As Long = 13
+Private Const OSDD_CUST_ROW As Long = 14
 
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
@@ -3964,13 +3964,14 @@ End Function
 '          extension, middle names or suffixes (Operating Manual 4.7).
 '   X:Z    up to 3 other addresses
 '   AA     phone(s), AB email(s) - several separated by ;
-'   Customer:        headers row 12 (beside the Customer Information
-'                    banner), inputs row 13 (beside Customer Name)
-'   Counterparties:  headers row 17, inputs rows 18-22, each beside its
+'   Customer:        banner row 12 ("Customer OSDD Inputs", beside
+'                    Customer Information), headers row 13, inputs row 14
+'   Counterparties:  banner row 16 ("Counterparty OSDD Inputs"),
+'                    headers row 17, inputs rows 18-22, each beside its
 '                    counterparty
-' The Alert Related Information rows (5-10) and banner, the Counterparty
-' Information banner, and the Country Risk Rating banner and rows (Excel
-' Risk Class, T26:AB27) run across to AB. Row 23 (the old
+' The Alert Related Information rows (5-10) and banner, and the Country
+' Risk Rating banner and rows (Excel Risk Class, T26:AB27) run across to
+' AB. Row 23 (the old
 ' Counterparty 6) is hidden. Themes are chosen with Ctrl+Shift+T (the
 ' theme manager's ChooseTheme), not on the sheet.
 '==================================================================
@@ -3986,7 +3987,7 @@ Public Sub StyleOsddInputs()
     Dim heads As Range, inputs As Range
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
-    If Left$(CellStr(ws.Range("W12").Value), 13) <> "Negative News" Then Exit Sub   ' not set up
+    If Left$(CellStr(ws.Range("W13").Value), 13) <> "Negative News" Then Exit Sub   ' not set up
     evts = Application.EnableEvents
     Application.EnableEvents = False
     wasProt = ws.ProtectContents
@@ -3997,13 +3998,13 @@ Public Sub StyleOsddInputs()
         CopyLook ws.Range("T" & r), ws.Range("U" & r & ":AB" & r)
     Next r
 
-    Set heads = ws.Range("V12:AB12,V17:AB17")
-    Set inputs = ws.Range("V13:AB13,V18:AB22")
+    Set heads = ws.Range("V13:AB13,V17:AB17")
+    Set inputs = ws.Range("V14:AB14,V18:AB22")
 
     CopyLook ws.Range("T17"), heads
     With heads
-        .HorizontalAlignment = ws.Range("T17").HorizontalAlignment
-        .VerticalAlignment = xlCenter
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = ws.Range("T17").VerticalAlignment
         .WrapText = False
         .ShrinkToFit = False
     End With
@@ -4013,7 +4014,7 @@ Public Sub StyleOsddInputs()
     inputs.VerticalAlignment = ws.Range("T18").VerticalAlignment
     inputs.Locked = False
     ' The tick boxes' cells hold TRUE / FALSE; the box shows it.
-    ws.Range("V13,V18:V22").NumberFormat = ";;;"
+    ws.Range("V14,V18:V22").NumberFormat = ";;;"
 
     ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
@@ -4109,7 +4110,7 @@ Private Sub CopyEdge(ByVal b As Border, ByVal dst As Range, ByVal edge As Long)
     End If
 End Sub
 
-' One entity's OSDD inputs from its row: 13 for the customer, 18-22 for
+' One entity's OSDD inputs from its row: 14 for the customer, 18-22 for
 ' counterparties 1-5. A ticked Listed Entity box (V) leaves negName empty,
 ' so no Negative News search is queued.
 Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal r As Long, ByVal fullName As String, _

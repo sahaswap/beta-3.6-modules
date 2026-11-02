@@ -16,12 +16,12 @@ Attribute VB_Name = "modInstallUpdate"
 '     files; removes the earlier one-off helpers (frmOsddInputs,
 '     modBuildFrmOsddInputs, modSheet1Setup)
 '   - edits single lines in the other modules: Reset clears the OSDD
-'     panel; Sheet1's code watches the theme picker in V13; the
+'     panel; Sheet1's code watches the theme picker's hidden cell; the
 '     narrative, Rename and PDF Merge take 5 counterparties; ThisWorkbook
 '     fits Sheet1 to the window on opening
 ' Step 2, Sheet1 - runs by itself once step 1 has finished, so the
 ' replaced modules are really gone:
-'   - the OSDD inputs beside the customer (row 13) and each counterparty
+'   - the OSDD inputs beside the customer (row 14) and each counterparty
 '     (rows 18-22) in V:AB, with a Listed Entity tick box; the Alert
 '     Related Information and country risk rows widened to AB; the theme
 '     picker hidden
@@ -45,9 +45,9 @@ Private Const SELF As String = "modInstallUpdate"
 ' can only be 255 characters at a time.
 Private Const NEG1 As String = """ AND (arrest OR corruption OR sentencing OR money laundering OR AML OR launder OR embezzle OR evas OR evad OR crime OR corrupt OR bribe OR theft OR extort OR drug OR traffic OR trafficking OR felony OR sanction OR counterfeit OR terror OR """
 Private Const NEG2 As String = """investigat*, indict*, charge?, court, lawsuit, judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"""
-Private Const SHEET_HOOK_MARK As String = "' (Inputs V13:AB13, V18:AB22. Search Matrix updates its links when opened.)"
+Private Const SHEET_HOOK_MARK As String = "' (Inputs V14:AB14, V18:AB22. Search Matrix updates its links when opened.)"
 Private Const RESET_LINE As String = _
-    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, V13:AB13, V18:AB22"").Value = """""
+    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, V14:AB14, V18:AB22"").Value = """""
 
 '------------------------------------------------------------------
 ' STEP 1 - the code
@@ -281,8 +281,9 @@ Private Function PatchCode(ByVal proj As Object) As String
                     ' Navy & Gold's Search Matrix bands one entity block at a time.
                     cm.ReplaceLine i, Replace(ln, "= 5 ", "= 13")
                     nBlock = nBlock + 1
-                ElseIf needSheetHook And t = "' OSDD panel (Module2): an email typed there turns into a link and takes" Then
-                    ' The second hook (9 lines, the old panel's range): replace it.
+                ElseIf needSheetHook And (t = "' OSDD panel (Module2): an email typed there turns into a link and takes" Or _
+                    t = "' OSDD inputs (Module2): an email typed there turns into a link and takes") Then
+                    ' An earlier 9-line hook (an older range): replace it.
                     cm.DeleteLines i, 9
                     cm.InsertLines i, SheetHook(ind)
                     needSheetHook = False
@@ -296,7 +297,7 @@ Private Function PatchCode(ByVal proj As Object) As String
                     nSheetHook = nSheetHook + 1
                     i = i + 7
                 ElseIf needSheetHook And t = "Me.Unprotect Password:=""p7ss""" Then
-                    If InStr(cm.Lines(1, cm.CountOfLines), "' OSDD panel (Module2): an email typed there turns into a link") = 0 Then
+                    If InStr(cm.Lines(1, cm.CountOfLines), "(Module2): an email typed there turns into a link") = 0 Then
                         cm.InsertLines i + 1, SheetHook(ind)
                         needSheetHook = False
                         nSheetHook = nSheetHook + 1
@@ -394,12 +395,12 @@ End Function
 ' Search Matrix brings its own links up to date when it is opened.
 Private Function SheetHook(ByVal ind As String) As String
     SheetHook = _
-        ind & "' OSDD inputs (Module2): an email typed there turns into a link and takes" & vbCrLf & _
-        ind & "' the link style - take the link off and put the inputs' look back." & vbCrLf & _
+        ind & "' OSDD inputs (Module2): a typed email turns into a link and takes the" & vbCrLf & _
+        ind & "' link style - take the link off and put the inputs' look back." & vbCrLf & _
         ind & SHEET_HOOK_MARK & vbCrLf & _
-        ind & "If Not Intersect(target, Me.Range(""V13:AB13,V18:AB22"")) Is Nothing Then" & vbCrLf & _
-        ind & "    If Intersect(target, Me.Range(""V13:AB13,V18:AB22"")).Hyperlinks.Count > 0 Then" & vbCrLf & _
-        ind & "        Intersect(target, Me.Range(""V13:AB13,V18:AB22"")).Hyperlinks.Delete" & vbCrLf & _
+        ind & "If Not Intersect(target, Me.Range(""V14:AB14,V18:AB22"")) Is Nothing Then" & vbCrLf & _
+        ind & "    If Intersect(target, Me.Range(""V14:AB14,V18:AB22"")).Hyperlinks.Count > 0 Then" & vbCrLf & _
+        ind & "        Intersect(target, Me.Range(""V14:AB14,V18:AB22"")).Hyperlinks.Delete" & vbCrLf & _
         ind & "        Application.Run ""StyleOsddInputs""" & vbCrLf & _
         ind & "    End If" & vbCrLf & _
         ind & "End If"
@@ -454,7 +455,7 @@ Public Sub InstallUpdate_Step2()
     ws.Range("U27:U28").Validation.Delete
     ws.Range("U27:U28").Clear
     PlainLook ws.Range("V3:AB28,U27:U28"), ws.Range("U26")
-    For Each r In Array(13, 14, 18, 19, 20, 21, 22)
+    For Each r In Array(12, 13, 14, 18, 19, 20, 21, 22)
         On Error Resume Next
         ws.Shapes("OSDD Listed " & r).Delete
         On Error GoTo Fail
@@ -490,42 +491,43 @@ Public Sub InstallUpdate_Step2()
     ws.Range("T23").Locked = True
     ws.Rows(23).Hidden = True
 
-    ' The OSDD inputs, beside the entities they are for: headers on row 12
-    ' (beside the Customer Information banner) and the customer's inputs on
-    ' row 13 (beside Customer Name); headers on row 17 and each
-    ' counterparty's inputs on its own row, 18-22.
-    stepName = "laying out the OSDD inputs (V12:AB22)"
+    ' The OSDD inputs, beside the entities they are for, under banners the
+    ' theme manager copies from the tables' own (rows 12 and 16): headers
+    ' on row 13 and the customer's inputs on row 14; headers on row 17 and
+    ' each counterparty's inputs on its own row, 18-22. The columns are
+    ' wide enough for each header at 10pt bold.
+    stepName = "laying out the OSDD inputs (V13:AB22)"
     ws.Columns("V:AB").Hidden = False
     ws.Columns("F").ColumnWidth = 1.55
     ws.Columns("T").ColumnWidth = 36
     ws.Columns("U").ColumnWidth = 1.55
-    ws.Columns("V").ColumnWidth = 12
+    ws.Columns("V").ColumnWidth = 14
     ws.Columns("W").ColumnWidth = 16
-    ws.Columns("X:Z").ColumnWidth = 13
-    ws.Columns("AA").ColumnWidth = 12
-    ws.Columns("AB").ColumnWidth = 16
+    ws.Columns("X:Z").ColumnWidth = 16
+    ws.Columns("AA").ColumnWidth = 13
+    ws.Columns("AB").ColumnWidth = 18
     heads = Array("Listed Entity", "Negative News", "Other Address 1", "Other Address 2", "Other Address 3", _
         "Phone", "Email")
     For c = 0 To 6
-        ws.Cells(12, 22 + c).Value = heads(c)
+        ws.Cells(13, 22 + c).Value = heads(c)
         ws.Cells(17, 22 + c).Value = heads(c)
     Next c
-    InputTip ws.Range("W13,W18:W22"), "Negative News", _
+    InputTip ws.Range("W14,W18:W22"), "Negative News", _
         "Leave blank to search the name without legal extensions (LLC, Inc...), middle names " & _
         "or suffixes, as the procedure asks - or type the name to search."
-    InputTip ws.Range("X13:Z13,X18:Z22"), "Other Address", _
+    InputTip ws.Range("X14:Z14,X18:Z22"), "Other Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
-    InputTip ws.Range("AA13,AA18:AA22"), "Phone", _
+    InputTip ws.Range("AA14,AA18:AA22"), "Phone", _
         "Each number gets its own search. Several? Separate them with ;"
-    InputTip ws.Range("AB13,AB18:AB22"), "Email", _
+    InputTip ws.Range("AB14,AB18:AB22"), "Email", _
         "Each email address gets its own search. Several? Separate them with ;"
     ' One readable text size for the whole form and the inputs (it was 8-9).
-    ws.Range("G5:AB10,G13:T14,G17:T22,G26:AB27,V12:AB13,V17:AB22").Font.Size = 10
+    ws.Range("G5:AB10,G13:T14,G17:T22,G26:AB27,V13:AB14,V17:AB22").Font.Size = 10
 
     ' Listed Entity: a tick box per entity. Ticked, OSDD Search and Search
     ' Matrix leave out that entity's Negative News search.
     stepName = "adding the Listed Entity tick boxes"
-    For Each r In Array(13, 18, 19, 20, 21, 22)
+    For Each r In Array(14, 18, 19, 20, 21, 22)
         ws.Range("V" & r).Locked = False
         With ws.Range("V" & r)
             Set cb = ws.CheckBoxes.Add(.Left + (.Width - 14) / 2, .Top + (.Height - 14) / 2, 14, 14)
@@ -577,7 +579,7 @@ Public Sub InstallUpdate_Step2()
     Application.Run "FitSheet1ToWindow"
     On Error GoTo 0
 
-    MsgBox "Step 2 of 2 done - Sheet1: OSDD inputs beside the customer (row 13) and each counterparty " & _
+    MsgBox "Step 2 of 2 done - Sheet1: OSDD inputs beside the customer (row 14) and each counterparty " & _
         "(rows 18-22) in columns V:AB, with a Listed Entity tick box; the Alert Related Information " & _
         "and Country Risk Rating blocks run across to AB; row 23 hidden; text at one size; Sheet7 on " & _
         "5 counterparties." & _
@@ -637,10 +639,10 @@ Private Sub BuildOsddSearchMatrix()
 
     For b = 0 To 5
         s = 2 + b * 13
-        ' This entity's OSDD inputs on Sheet1: row 13 for the customer, its
+        ' This entity's OSDD inputs on Sheet1: row 14 for the customer, its
         ' own row for a counterparty; Listed V, Negative News W, other
         ' addresses X:Z, phone AA, email AB.
-        er = IIf(b = 0, 13, 17 + b)
+        er = IIf(b = 0, 14, 17 + b)
         If b = 0 Then
             nm = "Sheet1!$J$13": ad = "Sheet1!$J$14": ent = "Customer"
             lbl = "=IF(" & nm & "="""",""Customer""," & nm & "&"" (Customer)"")"
