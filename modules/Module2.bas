@@ -3967,10 +3967,10 @@ End Function
 ' in W, counterparties 1-5 in X:AB - and one row per input:
 '   6     Negative News name. Blank = the name without its legal
 '         extension, middle names or suffixes (Operating Manual 4.7).
-'   7-9   up to 3 additional addresses
-'   10    telephone(s) / email(s) - several separated by ;
+'   7-9   up to 3 other (additional) addresses
+'   10    phone(s) / email(s) - several separated by ;
 ' Below it, the theme picker in V13 under its own banner. Row 23 (the
-' old Counterparty 6) is empty and locked.
+' old Counterparty 6) is hidden.
 '==================================================================
 
 ' Gives the panel's cells the look of the counterparty table in whatever
@@ -3981,7 +3981,7 @@ Public Sub StyleOsddInputs()
     Dim ws As Worksheet, wasProt As Boolean, evts As Boolean
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
-    If CellStr(ws.Range("V6").Value) <> "Negative News Name" Then Exit Sub      ' not set up
+    If Left$(CellStr(ws.Range("V6").Value), 13) <> "Negative News" Then Exit Sub   ' not set up
     evts = Application.EnableEvents
     Application.EnableEvents = False
     wasProt = ws.ProtectContents
@@ -3993,7 +3993,7 @@ Public Sub StyleOsddInputs()
         .HorizontalAlignment = ws.Range("T17").HorizontalAlignment
         .VerticalAlignment = ws.Range("T17").VerticalAlignment
         .WrapText = False
-        .ShrinkToFit = True
+        .ShrinkToFit = False
     End With
 
     CopyLook ws.Range("G18"), ws.Range("V6:V10")

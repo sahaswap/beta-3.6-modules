@@ -24,8 +24,9 @@ Attribute VB_Name = "modInstallUpdate"
 '   - the OSDD Search Inputs panel in V3:AB10 and the theme picker in V13
 '     (the theme manager puts copies of the form's banner shapes over
 '     them, and the sidebar back in its 3.6.1 places, on every theme
-'     change); columns T and V:AB narrowed so Sheet1 fits at a readable
-'     zoom; row 23 (the old Counterparty 6) emptied and locked
+'     change); gaps, column T and the panel narrowed and the text set to
+'     one readable size, so Sheet1 fits at a larger zoom; row 23 (the old
+'     Counterparty 6) emptied, locked and hidden
 '   - Sheet7's [Counterparties] tag on CP1-5 and [CP 6] emptied; Search
 '     Matrix's Counterparty 6 rows hidden
 '   - the current theme applied again, Sheet1 fitted to the window
@@ -343,42 +344,50 @@ Public Sub InstallUpdate_Step2()
     ws.Range("U27:U28").Clear
     PlainLook ws.Range("V3:AB28,U27:U28"), ws.Range("U26")
 
-    stepName = "emptying row 23 (the old Counterparty 6)"
-    ws.Rows(23).Hidden = False
+    ' Row 23 (the old Counterparty 6) emptied, locked and hidden. The theme
+    ' manager gives the sidebar buttons fixed sizes, so hiding it no longer
+    ' squashes PDF Merge.
+    stepName = "hiding row 23 (the old Counterparty 6)"
     ws.Range("G23").MergeArea.ClearContents
     ws.Range("J23").MergeArea.ClearContents
     ws.Range("J23").MergeArea.Validation.Delete
     ws.Range("T23").ClearContents
     ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
+    ws.Rows(23).Hidden = True
 
     ' The panel: a column-header row like the counterparty table's (row 17)
     ' and five input rows, rows 5-10 beside the Alert Related Information
     ' rows.
     stepName = "building the panel (V5:AB10)"
-    ' Narrower than before, with the counterparty address column, so the
-    ' whole sheet fits the window at a readable zoom.
+    ' Narrow gaps either side of the form and a narrower address column and
+    ' panel, so the whole sheet fits the window at a larger zoom.
     ws.Columns("V:AB").Hidden = False
+    ws.Columns("F").ColumnWidth = 1.55
     ws.Columns("T").ColumnWidth = 36
+    ws.Columns("U").ColumnWidth = 1.55
     ws.Columns("V").ColumnWidth = 15
-    ws.Columns("W:AB").ColumnWidth = 14
+    ws.Columns("W:AB").ColumnWidth = 12.5
+    ' Short headers and labels, so none of them has to shrink to fit; the
+    ' names are beside them on the form.
     ws.Range("V5").Value = "Input"
-    ws.Range("W5").Formula = "=""Customer""&IF($J$13="""",""""," & """ - ""&$J$13)"
+    ws.Range("W5").Value = "Customer"
     For c = 1 To 5
-        ws.Cells(5, 23 + c).Formula = "=""CP " & c & """&IF($J$" & (17 + c) & "="""",""""," & """ - ""&$J$" & (17 + c) & ")"
+        ws.Cells(5, 23 + c).Value = "CP " & c
     Next c
-    labels = Array("Negative News Name", "Additional Address 1", "Additional Address 2", _
-        "Additional Address 3", "Telephone / Email")
+    labels = Array("Negative News", "Other Address 1", "Other Address 2", "Other Address 3", "Phone / Email")
     For c = 0 To 4
         ws.Cells(6 + c, 22).Value = labels(c)
     Next c
-    InputTip ws.Range("W6:AB6"), "Negative News Name", _
+    InputTip ws.Range("W6:AB6"), "Negative News", _
         "Leave blank to search the name without legal extensions (LLC, Inc...), middle names " & _
         "or suffixes, as the procedure asks - or type the name to search."
-    InputTip ws.Range("W7:AB9"), "Additional Address", _
+    InputTip ws.Range("W7:AB9"), "Other Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
-    InputTip ws.Range("W10:AB10"), "Telephone / Email", _
+    InputTip ws.Range("W10:AB10"), "Phone / Email", _
         "Each gets its own search. Several? Separate them with ;"
+    ' One readable text size for the whole form and panel (it was 8 to 9).
+    ws.Range("G5:T10,G13:T14,G17:T22,G26:T27,V5:AB10,V13").Font.Size = 10
 
     stepName = "moving the theme picker to " & PICKER_NEW
     ws.Range(PICKER_NEW).Value = themeVal
@@ -413,8 +422,8 @@ Public Sub InstallUpdate_Step2()
     On Error GoTo 0
 
     MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB10 and the theme picker " & _
-        "in V13, both under banners like the form's; row 23 emptied; Sheet7 and Search Matrix on 5 " & _
-        "counterparties." & vbCrLf & vbCrLf & _
+        "in V13, both under banners like the form's; row 23 hidden; text at one size; Sheet7 and " & _
+        "Search Matrix on 5 counterparties." & vbCrLf & vbCrLf & _
         IIf(pickerErr = "", "", "The theme dropdown couldn't be added (" & pickerErr & "). Run " & _
             "BuildThemePicker once to add it." & vbCrLf & vbCrLf) & _
         "Now: Debug > Compile VBAProject, save the workbook, and delete modInstallUpdate.", _

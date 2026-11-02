@@ -489,7 +489,8 @@ End Sub
 ' time a theme changes its shape type, so its restore found nothing.
 Private Sub RestoreSheet1Baseline()
     Dim ws As Worksheet, wasProt As Boolean, shp As Shape, spec As Variant, s As Variant
-    Dim key As String, x As Single, y As Single, k As Long
+    Dim key As String, k As Long, stack As Variant, top0 As Single, foot As Single, gap As Single
+    Const BTN_H As Single = 28.6
 
     On Error Resume Next
     Set ws = ThisWorkbook.Sheets(SHEET_NAME)
@@ -505,41 +506,43 @@ Private Sub RestoreSheet1Baseline()
     Application.Run "FitSheet1ToWindow"
     DoEvents
 
-    ' macro (or caption), column, offset, row, offset, width, height
+    ' The panel labels and the action buttons where Beta 3.6.1 has them:
+    ' macro (or caption), column, offset, row, offset, width, height.
     spec = Array( _
         Array("ACTION PANEL", 1, 18.9, 4, 23.7, 161.6, 24.9), _
         Array("Start_Button_Create_Folders", 2, 3.9, 7, 12.3, 135.5, 28.8), _
         Array("Consolidated_AML_Workflow", 2, 3.8, 9, 16.9, 135.5, 28.8), _
         Array("SearchAndSavePDF_Direct", 2, 2.6, 12, 8.5, 135.5, 28.8), _
         Array("ExportToWord", 2, 2.4, 14, 1.9, 135.5, 28.9), _
-        Array("UTILITY PANEL", 1, 18.3, 17, 10.6, 161.6, 25.2), _
-        Array("Run_Mass_Rename_v4", 2, 2, 20, 7.5, 135.4, 28.6), _
-        Array("Trigger_PAD_Merge_Flow", 2, 2, 22, 16.7, 135.4, 28.2), _
-        Array("WarmUpWorkerProfiles", 2, 2, 25, 6.9, 135.4, 28.9), _
-        Array("ClearForm", 2, 2.7, 26, 12.4, 135.4, 28))
+        Array("UTILITY PANEL", 1, 18.3, 17, 10.6, 161.6, 25.2))
+    ' The utility buttons, top to bottom, share out the space between the
+    ' UTILITY label and the foot of the sheet evenly - so a hidden row
+    ' (23) narrows the gaps rather than squashing a button.
+    stack = Array("Run_Mass_Rename_v4", "Trigger_PAD_Merge_Flow", "WarmUpWorkerProfiles", "ClearForm")
+    top0 = ws.Rows(17).Top + 10.6 + 25.2
+    foot = ws.Rows(28).Top + ws.Rows(28).Height
+    gap = (foot - top0 - 4 * BTN_H) / 5
+
     For Each shp In ws.Shapes
         key = shp.OnAction
         If InStr(key, "!") > 0 Then key = Mid$(key, InStrRev(key, "!") + 1)
         If key = "" Then key = UCase$(Trim$(Replace(Replace(shp.TextFrame2.TextRange.Text, vbCr, ""), vbLf, "")))
         For Each s In spec
             If key = s(0) Then
-                x = ws.Columns(s(1)).Left + s(2)
-                y = ws.Rows(s(3)).Top + s(4)
-                For k = 1 To 3
-                    shp.Width = s(5)
-                    shp.Height = s(6)
-                    shp.Left = x
-                    shp.Top = y
-                    If Abs(shp.Left - x) < 0.5 And Abs(shp.Top - y) < 0.5 Then Exit For
-                    DoEvents
-                Next k
+                PutShape shp, ws.Columns(s(1)).Left + s(2), ws.Rows(s(3)).Top + s(4), s(5), s(6)
                 Exit For
             End If
         Next s
+        For k = 0 To UBound(stack)
+            If key = stack(k) Then
+                PutShape shp, ws.Columns(2).Left + 2, top0 + gap + k * (BTN_H + gap), 135.4, BTN_H
+                Exit For
+            End If
+        Next k
     Next shp
 
     ' The OSDD panel's banners, once the panel is there.
-    If CStr(ws.Range("V6").Value) = "Negative News Name" Then
+    If Left$(CStr(ws.Range("V6").Value), 13) = "Negative News" Then
         PlaceBanner ws, "Alert Related Information", "Rectangle: Single Corner Snipped OSDD", _
             "OSDD Search Inputs", "V", "AB"
         PlaceBanner ws, "Customer Information", "Rectangle: Single Corner Snipped Theme", "Theme", "V", "V"
@@ -548,6 +551,24 @@ Private Sub RestoreSheet1Baseline()
 
     If wasProt Then ws.Protect Password:=PWD
     On Error GoTo 0
+End Sub
+
+' Puts a sidebar shape at x, y in w x h and checks it landed there. It
+' moves with its cells but keeps its size, so hiding a row cannot squash
+' it.
+Private Sub PutShape(ByVal shp As Shape, ByVal x As Single, ByVal y As Single, _
+    ByVal w As Single, ByVal h As Single)
+    Dim k As Long
+    On Error Resume Next
+    shp.Placement = xlMove
+    For k = 1 To 3
+        shp.Width = w
+        shp.Height = h
+        shp.Left = x
+        shp.Top = y
+        If Abs(shp.Left - x) < 0.5 And Abs(shp.Top - y) < 0.5 Then Exit For
+        DoEvents
+    Next k
 End Sub
 
 ' A copy of the banner shape saying srcText, named nm and saying txt,
