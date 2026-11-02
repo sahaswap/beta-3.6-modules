@@ -3977,7 +3977,8 @@ End Function
 '==================================================================
 
 ' Gives the inputs the look of the counterparty table in whatever theme is
-' active - headers like row 17, inputs like T18 - and carries the look of
+' active - headers like row 17, each input row like T on its row - and
+' carries the look of
 ' the Alert Related Information rows and the country risk rows on from T
 ' to AB (the themes paint those rows only as far as T). The banners are
 ' shapes, so the theme styles those itself. The theme manager calls this
@@ -4001,7 +4002,11 @@ Public Sub StyleOsddInputs()
     Set heads = ws.Range("V13:AB13,V17:AB17")
     Set inputs = ws.Range("V14:AB14,V18:AB22")
 
-    CopyLook ws.Range("T17"), heads
+    ' One row at a time: on a range of several areas Excel will not draw the
+    ' borders between rows, and the counterparty inputs lost their row lines.
+    For Each r In Array(13, 17)
+        CopyLook ws.Range("T17"), ws.Range("V" & r & ":AB" & r)
+    Next r
     With heads
         .HorizontalAlignment = xlCenter
         .VerticalAlignment = ws.Range("T17").VerticalAlignment
@@ -4009,7 +4014,9 @@ Public Sub StyleOsddInputs()
         .ShrinkToFit = False
     End With
 
-    CopyLook ws.Range("T18"), inputs
+    For Each r In Array(14, 18, 19, 20, 21, 22)
+        CopyLook ws.Range("T" & r), ws.Range("V" & r & ":AB" & r)
+    Next r
     inputs.HorizontalAlignment = ws.Range("T18").HorizontalAlignment
     inputs.VerticalAlignment = ws.Range("T18").VerticalAlignment
     inputs.Locked = False
