@@ -446,9 +446,13 @@ Public Sub InstallUpdate_Step2()
 
     ' Whatever earlier layouts put to the right of the form, and the old
     ' visible theme picker, cleared.
+    ' Unmerge only the merged blocks that reach into V:AB, one block at a
+    ' time. (Unmerging V3:AB28 as a whole makes Excel widen it to every
+    ' block it touches - the Alert rows, then G4:T4 - and unmerge the
+    ' whole form. That is what an earlier version of this did.)
     stepName = "clearing the old layout (V3:AB28, U27:U28)"
+    UnmergeBlocksIn ws.Range("U3:AB28")
     With ws.Range("V3:AB28")
-        .UnMerge
         .Validation.Delete
         .Clear
     End With
@@ -465,16 +469,27 @@ Public Sub InstallUpdate_Step2()
     ' over them (the theme manager widens that). Each row's value cell is
     ' still J5-J10, so Sheet7's tags and everything else reading them is
     ' unaffected.
+    ' The form's own merged cells, as Beta 3.6.1 has them (they were lost
+    ' to the old clean-up described above).
+    stepName = "restoring the form's merged cells"
+    Application.DisplayAlerts = False
+    For Each r In Array("G4:T4", "G5:I5", "G6:I6", "G7:I7", "G8:I8", "G9:I9", "G10:I10", _
+        "G12:T12", "G13:I13", "J13:T13", "G14:I14", "J14:T14", _
+        "G16:T16", "G17:I17", "J17:S17", "G18:I18", "J18:S18", "G19:I19", "J19:S19", "G20:I20", "J20:S20", _
+        "G21:I21", "J21:S21", "G22:I22", "J22:S22", "G23:I23", "J23:S23", _
+        "G26:K26", "L26:N26", "P26:Q26", "R26:S26", "G27:K27", "L27:N27", "P27:Q27", "R27:S27")
+        If ws.Range(r).Cells(1, 1).MergeArea.Address <> ws.Range(r).Address Then ws.Range(r).Merge
+    Next r
+    Application.DisplayAlerts = True
+
     stepName = "widening the Alert Related Information and country risk rows to AB"
     Application.DisplayAlerts = False
     For c = 5 To 10
-        ws.Range("J" & c & ":AB" & c).UnMerge
         ws.Range("J" & c & ":AB" & c).Merge
     Next c
     ' Country Risk Rating too: Excel Risk Class (T26 / T27, still the cells
     ' its formula and Sheet7's [Country Risk] tag use) runs across to AB.
     For c = 26 To 27
-        ws.Range("T" & c & ":AB" & c).UnMerge
         ws.Range("T" & c & ":AB" & c).Merge
     Next c
     Application.DisplayAlerts = True
@@ -743,6 +758,23 @@ Private Function PickerList(ByVal rng As Range, ByVal list As String) As String
         PickerList = "error " & Err.Number & ": " & Err.Description
     Next attempt
 End Function
+
+' Unmerges each merged block that has a cell in rng - that block only,
+' however far it reaches outside rng, and nothing else.
+Private Sub UnmergeBlocksIn(ByVal rng As Range)
+    Dim cell As Range, blocks As New Collection, addr As Variant, seen As String
+    For Each cell In rng.Cells
+        If cell.MergeCells Then
+            If InStr(seen, "|" & cell.MergeArea.Address & "|") = 0 Then
+                seen = seen & "|" & cell.MergeArea.Address & "|"
+                blocks.Add cell.MergeArea.Address
+            End If
+        End If
+    Next cell
+    For Each addr In blocks
+        rng.Worksheet.Range(addr).UnMerge
+    Next addr
+End Sub
 
 ' Help text shown when a cell is selected.
 Private Sub InputTip(ByVal rng As Range, ByVal title As String, ByVal msg As String)
