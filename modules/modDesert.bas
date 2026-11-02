@@ -182,7 +182,8 @@ Sub ApplyDesert()
     ' was behind. The light well and the ridge went with them: all three
     ' were set dressing competing with the only things on this sidebar
     ' anyone actually uses. What is left is the buttons.
-    TightenUtilityGap ws             ' close Navy & Gold's inherited dead space
+    ' No TightenUtilityGap: the sidebar stays where every other theme has
+    ' it (the theme manager puts it back before each theme).
     AddBadgeRules ws                 ' after the badges are styled
     AddMoon ws                       ' before the title, so the type sits on top
     AddBannerMarks ws                ' chapter ticks, after the banners are styled
@@ -224,7 +225,6 @@ Sub RemoveDesert()
             n = n + 1
         End If
     Next shp
-    UndoShift ws                     ' before the backup is cleared
     RestoreAllCells
 
     On Error Resume Next
@@ -258,9 +258,9 @@ End Sub
 Private Function CaptureTitleText(ByVal ws As Worksheet) As String
     On Error Resume Next
     Dim shp As Shape, t As String, dot As Long
-    CaptureTitleText = ThisWorkbook.Name
-    dot = InStrRev(CaptureTitleText, ".")
-    If dot > 1 Then CaptureTitleText = Left$(CaptureTitleText, dot - 1)
+    ' The tool's name, not the file's: a copy saved as "Beta 3.6.1 2.xlsm"
+    ' should still say Beta 3.6.1. Change it here for a new version.
+    CaptureTitleText = "Beta 3.6.1"
     For Each shp In ws.Shapes
         t = ""
         If shp.TextFrame.HasText Then t = Trim$(shp.TextFrame.Characters.Text)

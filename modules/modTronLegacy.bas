@@ -311,11 +311,11 @@ Private Function CaptureTitleText(ByVal ws As Worksheet) As String
     ' Once a previous run has deleted the title shape there is no caption
     ' left on the sheet to read, and every run after that would render a
     ' title reading just "Beta" - which is exactly what happened. The
-    ' filename always carries the real version.
-    CaptureTitleText = ThisWorkbook.Name
+    ' filename was meant to carry the real version, but a saved copy's does not.
+    ' The tool's name, not the file's: a copy saved as "Beta 3.6.1 2.xlsm"
+    ' should still say Beta 3.6.1. Change it here for a new version.
+    CaptureTitleText = "Beta 3.6.1"
     Dim dot As Long
-    dot = InStrRev(CaptureTitleText, ".")
-    If dot > 1 Then CaptureTitleText = Left$(CaptureTitleText, dot - 1)
 
     For Each shp In ws.Shapes
         t = ""

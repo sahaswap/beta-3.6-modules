@@ -235,6 +235,7 @@ Public Sub ApplyThemeByKey(ByVal key As String)
     reg = ThemeRegistry()
 
     ClearTheme True
+    RestoreSheet1Baseline
 
     For i = LBound(reg) To UBound(reg)
         If reg(i)(0) = key Then
@@ -477,3 +478,115 @@ Public Sub SetActiveTheme(ByVal v As String)
     ThisWorkbook.Names.Add Name:=STATE_NAME, RefersTo:="=""" & v & """", Visible:=False
     On Error GoTo 0
 End Sub
+
+'---- Sheet1 baseline ------------------------------------------------
+' Every theme starts from the same Sheet1: the sidebar's buttons and
+' panel labels back where Beta 3.6.1 has them, and the OSDD panel's
+' banners copied fresh from the plain originals. Run between ClearTheme
+' and the next theme's apply. Without it the sidebar drifted from theme
+' to theme until the utility buttons sat stacked on one spot: Navy &
+' Gold puts positions back by shape name, and Excel renames a shape each
+' time a theme changes its shape type, so its restore found nothing.
+Private Sub RestoreSheet1Baseline()
+    Dim ws As Worksheet, wasProt As Boolean, shp As Shape, spec As Variant, s As Variant
+    Dim key As String
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(SHEET_NAME)
+    If ws Is Nothing Then Exit Sub
+    wasProt = ws.ProtectContents
+    ws.Unprotect Password:=PWD
+
+    ' macro (or caption), column, offset, row, offset, width, height
+    spec = Array( _
+        Array("ACTION PANEL", 1, 18.9, 4, 23.7, 161.6, 24.9), _
+        Array("Start_Button_Create_Folders", 2, 3.9, 7, 12.3, 135.5, 28.8), _
+        Array("Consolidated_AML_Workflow", 2, 3.8, 9, 16.9, 135.5, 28.8), _
+        Array("SearchAndSavePDF_Direct", 2, 2.6, 12, 8.5, 135.5, 28.8), _
+        Array("ExportToWord", 2, 2.4, 14, 1.9, 135.5, 28.9), _
+        Array("UTILITY PANEL", 1, 18.3, 17, 10.6, 161.6, 25.2), _
+        Array("Run_Mass_Rename_v4", 2, 2, 20, 7.5, 135.4, 28.6), _
+        Array("Trigger_PAD_Merge_Flow", 2, 2, 22, 16.7, 135.4, 28.2), _
+        Array("WarmUpWorkerProfiles", 2, 2, 25, 6.9, 135.4, 28.9), _
+        Array("ClearForm", 2, 2.7, 26, 12.4, 135.4, 28))
+    For Each shp In ws.Shapes
+        key = shp.OnAction
+        If InStr(key, "!") > 0 Then key = Mid$(key, InStrRev(key, "!") + 1)
+        If key = "" Then key = UCase$(Trim$(Replace(Replace(shp.TextFrame2.TextRange.Text, vbCr, ""), vbLf, "")))
+        For Each s In spec
+            If key = s(0) Then
+                shp.Left = ws.Columns(s(1)).Left + s(2)
+                shp.Top = ws.Rows(s(3)).Top + s(4)
+                shp.Width = s(5)
+                shp.Height = s(6)
+                Exit For
+            End If
+        Next s
+    Next shp
+
+    ' The OSDD panel's banners, once the panel is there.
+    If CStr(ws.Range("V6").Value) = "Negative News Name" Then
+        ' The whole width on screen first: Excel would not place a shape
+        ' past the edge of what it had laid out.
+        Application.ScreenUpdating = True
+        Application.Run "FitSheet1ToWindow"
+        DoEvents
+        PlaceBanner ws, "Alert Related Information", "Rectangle: Single Corner Snipped OSDD", _
+            "OSDD Search Inputs", "V", "AB"
+        PlaceBanner ws, "Customer Information", "Rectangle: Single Corner Snipped Theme", "Theme", "V", "V"
+        Application.ScreenUpdating = False
+    End If
+
+    If wasProt Then ws.Protect Password:=PWD
+    On Error GoTo 0
+End Sub
+
+' A copy of the banner shape saying srcText, named nm and saying txt,
+' over columns firstCol:lastCol with the original's top, height and side
+' inset. Narrowed before it moves and checked after, in case Excel holds
+' it short of where it was put.
+Private Sub PlaceBanner(ByVal ws As Worksheet, ByVal srcText As String, ByVal nm As String, _
+    ByVal txt As String, ByVal firstCol As String, ByVal lastCol As String)
+    Dim src As Shape, shp As Shape, inset As Single, L As Single, W As Single, k As Long
+
+    On Error Resume Next
+    ws.Shapes(nm).Delete
+    Set src = PlainBanner(ws, srcText)
+    If src Is Nothing Then Exit Sub
+    inset = src.Left - ws.Range("G1").Left
+    If inset < 0 Then inset = 0
+    L = ws.Range(firstCol & "1").Left + inset
+    W = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - L
+
+    Set shp = src.Duplicate
+    shp.Name = nm
+    shp.AlternativeText = ""
+    shp.TextFrame2.TextRange.Text = txt
+    shp.Placement = xlMove
+    For k = 1 To 3
+        shp.Width = 10
+        shp.Left = L
+        shp.Top = src.Top
+        shp.Height = src.Height
+        shp.Width = W
+        If Abs(shp.Left - L) < 1 And Abs(shp.Width - W) < 1 Then Exit For
+        DoEvents
+    Next k
+End Sub
+
+' The sheet's own banner saying txt - not a copy, not a theme's decoration.
+Private Function PlainBanner(ByVal ws As Worksheet, ByVal txt As String) As Shape
+    Dim shp As Shape, nm As String
+    On Error Resume Next
+    For Each shp In ws.Shapes
+        nm = shp.Name
+        If nm <> "Rectangle: Single Corner Snipped OSDD" And nm <> "Rectangle: Single Corner Snipped Theme" _
+           And Left$(nm, 8) <> "TRONADD_" And Left$(nm, 6) <> "NGADD_" _
+           And Left$(nm, 10) <> "DESERTADD_" And Left$(nm, 8) <> "DUNEADD_" Then
+            If InStr(1, shp.TextFrame2.TextRange.Text, txt, vbTextCompare) > 0 Then
+                Set PlainBanner = shp
+                Exit Function
+            End If
+        End If
+    Next shp
+End Function

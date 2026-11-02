@@ -741,7 +741,7 @@ Private Sub AddTitleBeta(ByVal ws As Worksheet, ByVal x As Single, ByVal y As Si
     shpTxt.Name = ADD_PFX & "TITLE_TXT"
     shpTxt.Fill.Visible = msoFalse
     shpTxt.Line.Visible = msoFalse
-    shpTxt.TextFrame.Characters.text = "Beta 3.5"
+    shpTxt.TextFrame.Characters.text = "Beta 3.6.1"
     With shpTxt.TextFrame.Characters.Font
         .Name = "Segoe UI"
         .Color = cGold
@@ -914,7 +914,7 @@ Private Function FindButton(ByVal ws As Worksheet, ByVal t As String) As Shape
         On Error Resume Next
         If shp.TextFrame.HasText Then
             txt = shp.TextFrame.Characters.text
-            If InStr(1, txt, t, vbTextCompare) > 0 Then
+            If InStr(1, txt, t, vbTextCompare) > 0 And Len(shp.OnAction) > 0 Then
                 Set FindButton = shp: Exit Function
             End If
         End If
