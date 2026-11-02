@@ -565,7 +565,8 @@ Private Sub RestoreSheet1Baseline()
     ' With the OSDD inputs beside the tables (columns V:AB), the Alert
     ' Related Information and Counterparty Information banners run across
     ' to AB, over the widened Alert rows and the counterparty inputs'
-    ' headers. Earlier banner copies (the old panel's and picker's) go.
+    ' headers, and Country Risk Rating over its widened rows. Earlier
+    ' banner copies (the old panel's and picker's) go.
     ws.Shapes("Rectangle: Single Corner Snipped OSDD").Delete
     ws.Shapes("Rectangle: Single Corner Snipped Theme").Delete
     ws.Shapes("OSDD Banner Customer").Delete
@@ -573,6 +574,7 @@ Private Sub RestoreSheet1Baseline()
     If Left$(CStr(ws.Range("W12").Value), 13) = "Negative News" Then
         StretchBanner ws, "Alert Related Information", "AB"
         StretchBanner ws, "Counterparty Information", "AB"
+        StretchBanner ws, "Country Risk Rating", "AB"
     End If
     Application.ScreenUpdating = False
 

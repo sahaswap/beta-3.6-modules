@@ -3968,19 +3968,21 @@ End Function
 '                    banner), inputs row 13 (beside Customer Name)
 '   Counterparties:  headers row 17, inputs rows 18-22, each beside its
 '                    counterparty
-' The Alert Related Information rows (5-10) and banner, and the
-' Counterparty Information banner, run across to AB. Row 23 (the old
+' The Alert Related Information rows (5-10) and banner, the Counterparty
+' Information banner, and the Country Risk Rating banner and rows (Excel
+' Risk Class, T26:AB27) run across to AB. Row 23 (the old
 ' Counterparty 6) is hidden. Themes are chosen with Ctrl+Shift+T (the
 ' theme manager's ChooseTheme), not on the sheet.
 '==================================================================
 
 ' Gives the inputs the look of the counterparty table in whatever theme is
-' active - headers like row 17, inputs like T18 - and carries each Alert
-' Related Information row's look on from T to AB (the themes paint those
-' rows only as far as T). The banners are shapes, so the theme styles
-' those itself. The theme manager calls this after every theme change.
+' active - headers like row 17, inputs like T18 - and carries the look of
+' the Alert Related Information rows and the country risk rows on from T
+' to AB (the themes paint those rows only as far as T). The banners are
+' shapes, so the theme styles those itself. The theme manager calls this
+' after every theme change.
 Public Sub StyleOsddInputs()
-    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean, r As Long
+    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean, r As Variant
     Dim heads As Range, inputs As Range
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
@@ -3991,7 +3993,7 @@ Public Sub StyleOsddInputs()
     On Error Resume Next
     If wasProt Then ws.Unprotect Password:="p7ss"
 
-    For r = 5 To 10
+    For Each r In Array(5, 6, 7, 8, 9, 10, 26, 27)
         CopyLook ws.Range("T" & r), ws.Range("U" & r & ":AB" & r)
     Next r
 

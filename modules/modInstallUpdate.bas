@@ -23,7 +23,8 @@ Attribute VB_Name = "modInstallUpdate"
 ' replaced modules are really gone:
 '   - the OSDD inputs beside the customer (row 13) and each counterparty
 '     (rows 18-22) in V:AB, with a Listed Entity tick box; the Alert
-'     Related Information rows widened to AB; the theme picker hidden
+'     Related Information and country risk rows widened to AB; the theme
+'     picker hidden
 '     (Ctrl+Shift+T chooses themes)
 '     (the theme manager puts copies of the form's banner shapes over
 '     them, and the sidebar back in its 3.6.1 places, on every theme
@@ -463,11 +464,17 @@ Public Sub InstallUpdate_Step2()
     ' over them (the theme manager widens that). Each row's value cell is
     ' still J5-J10, so Sheet7's tags and everything else reading them is
     ' unaffected.
-    stepName = "widening the Alert Related Information rows to AB"
+    stepName = "widening the Alert Related Information and country risk rows to AB"
     Application.DisplayAlerts = False
     For c = 5 To 10
         ws.Range("J" & c & ":AB" & c).UnMerge
         ws.Range("J" & c & ":AB" & c).Merge
+    Next c
+    ' Country Risk Rating too: Excel Risk Class (T26 / T27, still the cells
+    ' its formula and Sheet7's [Country Risk] tag use) runs across to AB.
+    For c = 26 To 27
+        ws.Range("T" & c & ":AB" & c).UnMerge
+        ws.Range("T" & c & ":AB" & c).Merge
     Next c
     Application.DisplayAlerts = True
 
@@ -513,7 +520,7 @@ Public Sub InstallUpdate_Step2()
     InputTip ws.Range("AB13,AB18:AB22"), "Email", _
         "Each email address gets its own search. Several? Separate them with ;"
     ' One readable text size for the whole form and the inputs (it was 8-9).
-    ws.Range("G5:AB10,G13:T14,G17:T22,G26:T27,V12:AB13,V17:AB22").Font.Size = 10
+    ws.Range("G5:AB10,G13:T14,G17:T22,G26:AB27,V12:AB13,V17:AB22").Font.Size = 10
 
     ' Listed Entity: a tick box per entity. Ticked, OSDD Search and Search
     ' Matrix leave out that entity's Negative News search.
@@ -536,7 +543,7 @@ Public Sub InstallUpdate_Step2()
     ' same in every theme.
     stepName = "colouring the country risk cells"
     RiskColours ws.Range("R27:S27")
-    RiskColours ws.Range("T27")
+    RiskColours ws.Range("T27:AB27")
 
     ' The theme picker, out of sight: themes are chosen with Ctrl+Shift+T.
     stepName = "hiding the theme picker (" & PICKER_NEW & ")"
@@ -572,7 +579,8 @@ Public Sub InstallUpdate_Step2()
 
     MsgBox "Step 2 of 2 done - Sheet1: OSDD inputs beside the customer (row 13) and each counterparty " & _
         "(rows 18-22) in columns V:AB, with a Listed Entity tick box; the Alert Related Information " & _
-        "block runs across to AB; row 23 hidden; text at one size; Sheet7 on 5 counterparties." & _
+        "and Country Risk Rating blocks run across to AB; row 23 hidden; text at one size; Sheet7 on " & _
+        "5 counterparties." & _
         vbCrLf & vbCrLf & _
         "Themes: Ctrl+Shift+T (nothing on the sheet any more)." & vbCrLf & vbCrLf & _
         "Search Matrix: " & IIf(CStr(ThisWorkbook.Sheets("Search Matrix").Range("B5").Value) = "Other Address 1", _
