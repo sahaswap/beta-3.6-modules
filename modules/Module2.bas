@@ -4015,11 +4015,11 @@ End Sub
 ' Search Matrix (laid out by modInstallUpdate) has a 13-row block per
 ' entity - the customer, then counterparties 1-5 - and rows 4-11 of each
 ' block are the panel's extra searches (other addresses, phone, email).
-' Shows those rows that have something to search, hides the rest, and
-' rebuilds the links. Sheet1's Worksheet_Change runs it when the panel or
-' a name changes.
+' Recalculates it and rebuilds the links, all rows showing. Sheet1's
+' Worksheet_Change runs it when the panel or a name changes, and Search
+' Matrix's Worksheet_Activate whenever the sheet is opened.
 Public Sub RefreshOsddMatrix()
-    Dim sm As Worksheet, b As Long, r As Long, wasProt As Boolean, evts As Boolean
+    Dim sm As Worksheet, wasProt As Boolean, evts As Boolean
 
     On Error Resume Next
     Set sm = ThisWorkbook.Sheets("Search Matrix")
@@ -4030,11 +4030,7 @@ Public Sub RefreshOsddMatrix()
     wasProt = sm.ProtectContents
     If wasProt Then sm.Unprotect Password:="p7ss"
     sm.Calculate
-    For b = 0 To 5
-        For r = 2 + b * 13 + 3 To 2 + b * 13 + 10
-            sm.Rows(r).Hidden = (CStr(sm.Range("F" & r).Value) = "")
-        Next r
-    Next b
+    sm.Rows("2:79").Hidden = False
     If wasProt Then sm.Protect Password:="p7ss"
     Application.EnableEvents = evts
     Application.Run "RefreshSearchMatrixHyperlinks"

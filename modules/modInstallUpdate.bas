@@ -205,7 +205,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long, nNavy As Long
     Dim nNavyBtn As Long, nNavyTitle As Long, hasFindButton As Boolean
     Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean
-    Dim openNote As String, out As String
+    Dim openNote As String, out As String, smNote As String
 
     For Each comp In proj.VBComponents
         If comp.Name <> SELF And Left$(comp.Name, 10) <> "zOldModule" Then
@@ -295,6 +295,29 @@ Private Function PatchCode(ByVal proj As Object) As String
         End If
     Next comp
 
+    ' Search Matrix: links brought up to date whenever it is opened.
+    smNote = ""
+    Set cm = Nothing
+    On Error Resume Next
+    Set cm = proj.VBComponents(ThisWorkbook.Sheets("Search Matrix").CodeName).CodeModule
+    On Error GoTo 0
+    If cm Is Nothing Then
+        smNote = "NOT DONE - Search Matrix's code module not found"
+    Else
+        t = ""
+        If cm.CountOfLines > 0 Then t = cm.Lines(1, cm.CountOfLines)
+        If InStr(t, "RefreshOsddMatrix") > 0 Then
+            smNote = "already there"
+        ElseIf InStr(t, "Sub Worksheet_Activate(") > 0 Then
+            smNote = "NOT DONE - Search Matrix has its own Worksheet_Activate: add  Application.Run ""RefreshOsddMatrix""  to it"
+        Else
+            cm.AddFromString vbCrLf & "' Search Matrix up to date whenever it is opened (Module2 RefreshOsddMatrix)." & vbCrLf & _
+                "Private Sub Worksheet_Activate()" & vbCrLf & "    On Error Resume Next" & vbCrLf & _
+                "    Application.Run ""RefreshOsddMatrix""" & vbCrLf & "End Sub"
+            smNote = "added"
+        End If
+    End If
+
     ' ThisWorkbook: fit Sheet1 to the window on opening.
     Set cm = proj.VBComponents("ThisWorkbook").CodeModule
     t = ""
@@ -324,6 +347,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nBlock, 1, "Navy & Gold Search Matrix: one band per entity")
     out = out & Item(nSheetHook, 1, "Sheet1's code: panel edits restyle the panel and update Search Matrix")
     out = out & "   ThisWorkbook fits Sheet1 on opening: " & openNote & vbCrLf
+    out = out & "   Search Matrix refreshes its links when opened: " & smNote & vbCrLf
     PatchCode = out
 End Function
 
@@ -461,8 +485,11 @@ Public Sub InstallUpdate_Step2()
     On Error GoTo 0
 
     MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB11 and the theme picker " & _
-        "in V13, both under banners like the form's; row 23 hidden; text at one size; Sheet7 and " & _
-        "Search Matrix on 5 counterparties." & vbCrLf & vbCrLf & _
+        "in V13, both under banners like the form's; row 23 hidden; text at one size; Sheet7 on 5 " & _
+        "counterparties." & vbCrLf & vbCrLf & _
+        "Search Matrix: " & IIf(CStr(ThisWorkbook.Sheets("Search Matrix").Range("B5").Value) = "Other Address 1", _
+            "rebuilt - 13 searches per entity (customer and CP 1-5), rows 2 to 79.", _
+            "NOT rebuilt - send a screenshot of this message.") & vbCrLf & vbCrLf & _
         IIf(pickerErr = "", "", "The theme dropdown couldn't be added (" & pickerErr & "). Run " & _
             "BuildThemePicker once to add it." & vbCrLf & vbCrLf) & _
         "Now: Debug > Compile VBAProject, save the workbook, and delete modInstallUpdate.", _
@@ -487,8 +514,7 @@ End Sub
 ' address, name + address, the panel's three other addresses (each on its
 ' own and with the name), phone, email, and Negative News pages 1 and 2,
 ' which use the panel's Negative News name when it has one. Page 2 now
-' starts at result 11 (&start=10), as OSDD Search's does. Rows with
-' nothing to search are hidden by Module2's RefreshOsddMatrix.
+' starts at result 11 (&start=10), as OSDD Search's does.
 Private Sub BuildOsddSearchMatrix()
     Dim sm As Worksheet, smProt As Boolean, b As Long, k As Long, r As Long, s As Long
     Dim nm As String, ad As String, pc As String, ent As String, lbl As String
