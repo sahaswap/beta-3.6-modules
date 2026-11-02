@@ -43,7 +43,9 @@ Private m_CPNames(1 To 6) As String
 ' Galileo moved to the Excel type dropdown (it's a spreadsheet, not a
 ' PDF), and Sigma replaced by the CTS Report / Customer KYC label.
 Private Const CUSTOMER_CATS As String = "External Search 1|External Search 2|External Search 3|Website|Google Translate|Customer Name + SSN|CTS Report_Customer KYC|Alert Write Up|Galileo Profile"
-Private Const CP_CATS As String = "External Search 1|External Search 2|External Search 3|Website|Google Translate"
+Private Const CP_CATS As String = "External Search 1|External Search 2|External Search 3|Website|Google Translate|CTS Report"
+' A counterparty's CTS report: ECM_AlertID_CTS Report_<Counterparty n_name>.
+Private Const CAT_CTS_CP As String = "CTS Report"
 
 ' This customer category is a standalone document label - it
 ' deliberately drops the entity identifier from the final file name,
@@ -145,7 +147,7 @@ End Sub
 ' --- Called once by UserForm2's InitRows to copy in the 6 counterparty names ---
 Public Sub SetCPNames(ByRef names() As String)
     Dim i As Long
-    For i = 1 To 6
+    For i = 1 To 5
         m_CPNames(i) = names(i)
     Next i
 End Sub
@@ -155,7 +157,7 @@ Public Sub BuildEntityList()
     Dim i As Long
     CboEntity.Clear
     CboEntity.AddItem "Customer (" & CustName & ")"
-    For i = 1 To 6
+    For i = 1 To 5
         If m_CPNames(i) <> "" Then
             CboEntity.AddItem "Counterparty " & i & " (" & m_CPNames(i) & ")"
         Else
@@ -297,6 +299,9 @@ Public Function ComputeNewName() As String
         ElseIf CboCategory.Value = CAT_CTS_KYC Then
             ' Standalone label - no entity identifier in the file name.
             newName = ECM & "_" & AlertID & "_" & CboCategory.Value
+        ElseIf CboCategory.Value = CAT_CTS_CP Then
+            ' Counterparty CTS report - its identifier after the label.
+            newName = ECM & "_" & AlertID & "_CTS Report_" & EntityIdentifier()
         Else
             newName = ECM & "_" & AlertID & "_" & EntityIdentifier() & "_" & CboCategory.Value
         End If

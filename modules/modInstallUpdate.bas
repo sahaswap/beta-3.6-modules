@@ -17,7 +17,8 @@ Attribute VB_Name = "modInstallUpdate"
 '     modBuildFrmOsddInputs, modSheet1Setup)
 '   - edits single lines in the other modules: Reset clears the OSDD
 '     panel; Sheet1's code watches the theme picker's hidden cell; the
-'     narrative, Rename and PDF Merge take 5 counterparties; ThisWorkbook
+'     narrative, Rename and PDF Merge take 5 counterparties (and the Rename
+'     form offers CTS Report for counterparties); ThisWorkbook
 '     fits Sheet1 to the window on opening
 ' Step 2, Sheet1 - runs by itself once step 1 has finished, so the
 ' replaced modules are really gone:
@@ -210,6 +211,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long, nNavy As Long
     Dim nNavyBtn As Long, nNavyTitle As Long, hasFindButton As Boolean
     Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean, nAlertRows As Long
+    Dim nRenRow As Long, nRenCts As Long
     Dim openNote As String, out As String, smNote As String
 
     For Each comp In proj.VBComponents
@@ -277,6 +279,27 @@ Private Function PatchCode(ByVal proj As Object) As String
                 ElseIf InStr(ln, "Characters.text = ""Beta 3.5""") > 0 Then
                     cm.ReplaceLine i, Replace(ln, """Beta 3.5""", """Beta 3.6.1""")
                     nNavyTitle = nNavyTitle + 1
+                ElseIf comp.Name = "clsRenameRow" And t = "For i = 1 To 6" Then
+                    ' Rename form: counterparties 1-5.
+                    cm.ReplaceLine i, Replace(ln, "To 6", "To 5")
+                    nRenRow = nRenRow + 1
+                ElseIf comp.Name = "clsRenameRow" And Left$(t, 25) = "Private Const CP_CATS As " And _
+                    InStr(t, "CTS Report") = 0 Then
+                    ' Rename form: a CTS Report category for counterparties too.
+                    cm.ReplaceLine i, Left$(ln, Len(RTrim$(ln)) - 1) & "|CTS Report"""
+                    cm.InsertLines i + 1, _
+                        "' A counterparty's CTS report: ECM_AlertID_CTS Report_<Counterparty n_name>." & vbCrLf & _
+                        "Private Const CAT_CTS_CP As String = ""CTS Report"""
+                    i = i + 2
+                    nRenCts = nRenCts + 1
+                ElseIf comp.Name = "clsRenameRow" And t = "newName = ECM & ""_"" & AlertID & ""_"" & CboCategory.Value" And _
+                    InStr(cm.Lines(1, cm.CountOfLines), "= CAT_CTS_CP Then") = 0 Then
+                    cm.InsertLines i + 1, _
+                        Mid$(ind, 5) & "ElseIf CboCategory.Value = CAT_CTS_CP Then" & vbCrLf & _
+                        ind & "' Counterparty CTS report - its identifier after the label." & vbCrLf & _
+                        ind & "newName = ECM & ""_"" & AlertID & ""_CTS Report_"" & EntityIdentifier()"
+                    i = i + 3
+                    nRenCts = nRenCts + 1
                 ElseIf Left$(t, 30) = "Private Const BLOCK As Long = " And InStr(t, "= 5 ") > 0 Then
                     ' Navy & Gold's Search Matrix bands one entity block at a time.
                     cm.ReplaceLine i, Replace(ln, "= 5 ", "= 13")
@@ -385,6 +408,8 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nBlock, 1, "Navy & Gold Search Matrix: one band per entity")
     out = out & Item(nSheetHook, 1, "Sheet1's code: a link Excel makes of a typed email is taken off")
     out = out & Item(nAlertRows, 2, "Sheet1's code: Program Name / Escalation Scenario greying covers J:AB")
+    out = out & Item(nRenRow, 2, "Rename form: counterparties 1-5")
+    out = out & Item(nRenCts, 2, "Rename form: CTS Report for counterparties")
     out = out & "   ThisWorkbook fits Sheet1 and sets Ctrl+Shift+T on opening: " & openNote & vbCrLf
     out = out & "   Search Matrix refreshes its links when opened: " & smNote & vbCrLf
     PatchCode = out
