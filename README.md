@@ -21,6 +21,7 @@ workbook. A module imported over one with the same macro names stops with
 | `NonEscalation_Template_Combined.txt` | Readable copy of that narrative template. |
 | `Module2.bas` | OSDD Search. Reads its inputs from the OSDD Search Inputs panel on Sheet1 (V3:AB10, under a copy of the form's banner shape: a column per entity - customer, CP1-5 - with Negative News name, 3 additional addresses, telephone / email). `StyleOsddInputs` re-colours the panel after a theme change; `FitSheet1ToWindow` zooms Sheet1 to fit the window. |
 | `modInstallUpdate.bas` | One-time installer `InstallUpdate`: from a folder holding Module2, modTronLegacy, modThemeManager and modDesert (CRLF copies), backs up and replaces those modules, edits the single lines that change in the others (Reset, Sheet1's code, narrative / Rename / PDF Merge on 5 counterparties, ThisWorkbook), then lays out Sheet1 (panel, theme picker in V13, row 23 emptied) and Sheet7 / Search Matrix. Needs Trust access. Delete it afterwards. |
+| `modLayoutDump.bas` | Diagnostic macro `DumpSheet1Layout`: writes Sheet1's layout - every shape's position, size and settings, column widths, row heights, merged areas; no cell values - to "Sheet1 layout.txt" on the Desktop and opens it. |
 | `Module3.bas` | Generate Narrative (`ExportToWord`). |
 | `Sheet1_CodeModule_UPDATED.txt` | Sheet1's sheet-module code, to paste into the sheet's code window. |
 
