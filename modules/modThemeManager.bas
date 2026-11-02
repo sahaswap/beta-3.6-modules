@@ -489,13 +489,21 @@ End Sub
 ' time a theme changes its shape type, so its restore found nothing.
 Private Sub RestoreSheet1Baseline()
     Dim ws As Worksheet, wasProt As Boolean, shp As Shape, spec As Variant, s As Variant
-    Dim key As String
+    Dim key As String, x As Single, y As Single, k As Long
 
     On Error Resume Next
     Set ws = ThisWorkbook.Sheets(SHEET_NAME)
     If ws Is Nothing Then Exit Sub
     wasProt = ws.ProtectContents
     ws.Unprotect Password:=PWD
+
+    ' Sheet1 active and all of it on screen first. Clearing a theme visits
+    ' the other sheets, and until Sheet1 is laid out again Excel holds a
+    ' shape short of where it is put - which is how the utility buttons
+    ' ended up stacked on one spot.
+    Application.ScreenUpdating = True
+    Application.Run "FitSheet1ToWindow"
+    DoEvents
 
     ' macro (or caption), column, offset, row, offset, width, height
     spec = Array( _
@@ -515,10 +523,16 @@ Private Sub RestoreSheet1Baseline()
         If key = "" Then key = UCase$(Trim$(Replace(Replace(shp.TextFrame2.TextRange.Text, vbCr, ""), vbLf, "")))
         For Each s In spec
             If key = s(0) Then
-                shp.Left = ws.Columns(s(1)).Left + s(2)
-                shp.Top = ws.Rows(s(3)).Top + s(4)
-                shp.Width = s(5)
-                shp.Height = s(6)
+                x = ws.Columns(s(1)).Left + s(2)
+                y = ws.Rows(s(3)).Top + s(4)
+                For k = 1 To 3
+                    shp.Width = s(5)
+                    shp.Height = s(6)
+                    shp.Left = x
+                    shp.Top = y
+                    If Abs(shp.Left - x) < 0.5 And Abs(shp.Top - y) < 0.5 Then Exit For
+                    DoEvents
+                Next k
                 Exit For
             End If
         Next s
@@ -526,16 +540,11 @@ Private Sub RestoreSheet1Baseline()
 
     ' The OSDD panel's banners, once the panel is there.
     If CStr(ws.Range("V6").Value) = "Negative News Name" Then
-        ' The whole width on screen first: Excel would not place a shape
-        ' past the edge of what it had laid out.
-        Application.ScreenUpdating = True
-        Application.Run "FitSheet1ToWindow"
-        DoEvents
         PlaceBanner ws, "Alert Related Information", "Rectangle: Single Corner Snipped OSDD", _
             "OSDD Search Inputs", "V", "AB"
         PlaceBanner ws, "Customer Information", "Rectangle: Single Corner Snipped Theme", "Theme", "V", "V"
-        Application.ScreenUpdating = False
     End If
+    Application.ScreenUpdating = False
 
     If wasProt Then ws.Protect Password:=PWD
     On Error GoTo 0
