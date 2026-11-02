@@ -427,8 +427,8 @@ Private Sub ApplyCells(ByVal ws As Worksheet)
     ' The theme picker. It sits inside CANVAS, so without this the one
     ' control that switches themes takes the plain ground fill and
     ' becomes the least visible thing on the sheet.
-    PaintCells ws.Range("V13"), cSlab
-    With ws.Range("V13")
+    PaintCells ws.Range("AD1"), cSlab
+    With ws.Range("AD1")
         .Font.Name = "Segoe UI": .Font.Size = 9
         .Font.Color = cSand: .Font.Bold = True: .Font.Italic = False
         .Borders.LineStyle = xlContinuous

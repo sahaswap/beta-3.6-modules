@@ -468,8 +468,8 @@ Private Sub ApplyCells(ByVal ws As Worksheet)
     '    takes the plain ground fill and dim text and the one control that
     '    switches themes becomes the least visible thing on the sheet.
     '    Styled as a control: surface colour, lit caption.
-    PaintCells ws.Range("V13"), cSlab
-    With ws.Range("V13")
+    PaintCells ws.Range("AD1"), cSlab
+    With ws.Range("AD1")
         .Font.Name = "Segoe UI": .Font.Size = 9
         .Font.Color = cCyan: .Font.Bold = True: .Font.Italic = False
         .HorizontalAlignment = xlCenter

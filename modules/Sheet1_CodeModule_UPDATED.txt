@@ -54,14 +54,14 @@ Private Sub Worksheet_Change(ByVal target As Range)
     ' handler has exited and sheet protection has settled - see the
     ' notes at the top of this file.
     ' ==========================================================
-    If Not Intersect(target, Me.Range("V13")) Is Nothing Then
+    If Not Intersect(target, Me.Range("AD1")) Is Nothing Then
         On Error Resume Next
         Application.OnTime Now + TimeSerial(0, 0, 1), "OnThemePicked"
         On Error GoTo ErrorHandler
 
         ' If U28 was the whole change, nothing else in this handler
         ' applies - leave before touching protection.
-        If Intersect(target, Me.Range("V13")).Address = target.Address Then Exit Sub
+        If Intersect(target, Me.Range("AD1")).Address = target.Address Then Exit Sub
     End If
 
     ' Break sheet grouping if active (grouped sheets prevent Protect/Unprotect)
@@ -82,12 +82,12 @@ Private Sub Worksheet_Change(ByVal target As Range)
     stepName = "1. Unprotecting Workbook and Sheet"
     ThisWorkbook.Unprotect Password:="p7ss"
     Me.Unprotect Password:="p7ss"
-    ' OSDD panel (Module2): an email typed there turns into a link and takes
-    ' the link style - take the link off and put the panel's look back.
-    ' (Search Matrix brings its links up to date when it is opened.)
-    If Not Intersect(target, Me.Range("W6:AB11")) Is Nothing Then
-        If Intersect(target, Me.Range("W6:AB11")).Hyperlinks.Count > 0 Then
-            Intersect(target, Me.Range("W6:AB11")).Hyperlinks.Delete
+    ' OSDD inputs (Module2): an email typed there turns into a link and takes
+    ' the link style - take the link off and put the inputs' look back.
+    ' (Inputs V13:AB13, V18:AB22. Search Matrix updates its links when opened.)
+    If Not Intersect(target, Me.Range("V13:AB13,V18:AB22")) Is Nothing Then
+        If Intersect(target, Me.Range("V13:AB13,V18:AB22")).Hyperlinks.Count > 0 Then
+            Intersect(target, Me.Range("V13:AB13,V18:AB22")).Hyperlinks.Delete
             Application.Run "StyleOsddInputs"
         End If
     End If
@@ -105,8 +105,8 @@ Private Sub Worksheet_Change(ByVal target As Range)
     ' Logic Ranges
     Set DecisionCell = Range("J5")
     Set TemplateCell = Range("J6")
-    Set ProgNameRange = Range("J7:T7")
-    Set EscScenarioRange = Range("J8:T8")
+    Set ProgNameRange = Range("J7:AB7")
+    Set EscScenarioRange = Range("J8:AB8")
 
     ' Autocapitalize Ranges
     ' (fixed off-by-one: Name value is J13, Address value is J14 - the

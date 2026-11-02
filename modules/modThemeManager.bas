@@ -49,7 +49,9 @@ Public Const THEME_DESERT As String = "DESERT"
 Public Const THEME_NAVY As String = "NAVYGOLD"
 
 Private Const SHEET_NAME As String = "Sheet1"
-Private Const PICKER_CELL As String = "V13"
+' The picker's cell is kept out of sight (row 1 and column AD are hidden):
+' themes are chosen with Ctrl+Shift+T (ChooseTheme), not on the sheet.
+Private Const PICKER_CELL As String = "AD1"
 Private Const STATE_NAME As String = "_ActiveTheme"
 Private Const PWD As String = "p7ss"
 
@@ -479,6 +481,25 @@ Public Sub SetActiveTheme(ByVal v As String)
     On Error GoTo 0
 End Sub
 
+'---- theme chooser --------------------------------------------------
+' Ctrl+Shift+T (set up in ThisWorkbook's Workbook_Open). There is no theme
+' control on the sheet: the picker cell is hidden, so only someone who
+' knows the shortcut changes themes.
+Public Sub ChooseTheme()
+    Dim reg As Variant, i As Long, msg As String, pick As String, n As Long
+    reg = ThemeRegistry()
+    msg = "Type the number of the theme:" & vbCrLf
+    For i = LBound(reg) To UBound(reg)
+        msg = msg & vbCrLf & (i - LBound(reg)) & "  =  " & reg(i)(1) & _
+            IIf(reg(i)(0) = ActiveTheme(), "   (current)", "")
+    Next i
+    pick = InputBox(msg, "Theme")
+    If StrPtr(pick) = 0 Or Not IsNumeric(Trim$(pick)) Then Exit Sub
+    n = CLng(Trim$(pick)) + LBound(reg)
+    If n < LBound(reg) Or n > UBound(reg) Then Exit Sub
+    ApplyThemeByKey CStr(reg(n)(0))
+End Sub
+
 '---- Sheet1 baseline ------------------------------------------------
 ' Every theme starts from the same Sheet1: the sidebar's buttons and
 ' panel labels back where Beta 3.6.1 has them, and the OSDD panel's
@@ -541,11 +562,17 @@ Private Sub RestoreSheet1Baseline()
         Next k
     Next shp
 
-    ' The OSDD panel's banners, once the panel is there.
-    If Left$(CStr(ws.Range("V6").Value), 13) = "Negative News" Then
-        PlaceBanner ws, "Alert Related Information", "Rectangle: Single Corner Snipped OSDD", _
-            "OSDD Search Inputs", "V", "AB"
-        PlaceBanner ws, "Customer Information", "Rectangle: Single Corner Snipped Theme", "Theme", "V", "V"
+    ' With the OSDD inputs beside the tables (columns V:AB), the Alert
+    ' Related Information and Counterparty Information banners run across
+    ' to AB, over the widened Alert rows and the counterparty inputs'
+    ' headers. Earlier banner copies (the old panel's and picker's) go.
+    ws.Shapes("Rectangle: Single Corner Snipped OSDD").Delete
+    ws.Shapes("Rectangle: Single Corner Snipped Theme").Delete
+    ws.Shapes("OSDD Banner Customer").Delete
+    ws.Shapes("OSDD Banner Counterparty").Delete
+    If Left$(CStr(ws.Range("W12").Value), 13) = "Negative News" Then
+        StretchBanner ws, "Alert Related Information", "AB"
+        StretchBanner ws, "Counterparty Information", "AB"
     End If
     Application.ScreenUpdating = False
 
@@ -571,35 +598,19 @@ Private Sub PutShape(ByVal shp As Shape, ByVal x As Single, ByVal y As Single, _
     Next k
 End Sub
 
-' A copy of the banner shape saying srcText, named nm and saying txt,
-' over columns firstCol:lastCol with the original's top, height and side
-' inset. Narrowed before it moves and checked after, in case Excel holds
-' it short of where it was put.
-Private Sub PlaceBanner(ByVal ws As Worksheet, ByVal srcText As String, ByVal nm As String, _
-    ByVal txt As String, ByVal firstCol As String, ByVal lastCol As String)
-    Dim src As Shape, shp As Shape, inset As Single, L As Single, W As Single, k As Long
-
+' Widens the sheet's banner saying txt so its right end sits at the right
+' of column lastCol, as far in from the edge as its left end is from G.
+Private Sub StretchBanner(ByVal ws As Worksheet, ByVal txt As String, ByVal lastCol As String)
+    Dim shp As Shape, inset As Single, W As Single, k As Long
     On Error Resume Next
-    ws.Shapes(nm).Delete
-    Set src = PlainBanner(ws, srcText)
-    If src Is Nothing Then Exit Sub
-    inset = src.Left - ws.Range("G1").Left
+    Set shp = PlainBanner(ws, txt)
+    If shp Is Nothing Then Exit Sub
+    inset = shp.Left - ws.Range("G1").Left
     If inset < 0 Then inset = 0
-    L = ws.Range(firstCol & "1").Left + inset
-    W = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - L
-
-    Set shp = src.Duplicate
-    shp.Name = nm
-    shp.AlternativeText = ""
-    shp.TextFrame2.TextRange.Text = txt
-    shp.Placement = xlMove
+    W = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - shp.Left
     For k = 1 To 3
-        shp.Width = 10
-        shp.Left = L
-        shp.Top = src.Top
-        shp.Height = src.Height
         shp.Width = W
-        If Abs(shp.Left - L) < 1 And Abs(shp.Width - W) < 1 Then Exit For
+        If Abs(shp.Width - W) < 1 Then Exit For
         DoEvents
     Next k
 End Sub
@@ -610,7 +621,8 @@ Private Function PlainBanner(ByVal ws As Worksheet, ByVal txt As String) As Shap
     On Error Resume Next
     For Each shp In ws.Shapes
         nm = shp.Name
-        If nm <> "Rectangle: Single Corner Snipped OSDD" And nm <> "Rectangle: Single Corner Snipped Theme" _
+        If Left$(nm, 12) <> "OSDD Banner " And nm <> "Rectangle: Single Corner Snipped OSDD" _
+           And nm <> "Rectangle: Single Corner Snipped Theme" _
            And Left$(nm, 8) <> "TRONADD_" And Left$(nm, 6) <> "NGADD_" _
            And Left$(nm, 10) <> "DESERTADD_" And Left$(nm, 8) <> "DUNEADD_" Then
             If InStr(1, shp.TextFrame2.TextRange.Text, txt, vbTextCompare) > 0 Then

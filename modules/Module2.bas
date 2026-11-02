@@ -132,13 +132,9 @@ Private Const SEARCH_PAGES As Long = 1
 ' is left empty).
 Private Const CP_FIRST_ROW As Long = 18
 Private Const CP_LAST_ROW As Long = 22
-' The OSDD inputs panel on Sheet1 (see StyleOsddInputs): the customer's
-' column, then counterparties 1-5; and its rows.
-Private Const OSDD_CUST_COL As Long = 23             ' W
-Private Const OSDD_ROW_NEG As Long = 6
-Private Const OSDD_ROW_ADDR As Long = 7              ' 7 to 9
-Private Const OSDD_ROW_PHONE As Long = 10
-Private Const OSDD_ROW_EMAIL As Long = 11
+' The customer's row of OSDD inputs on Sheet1 (counterparties' are on
+' their own rows); see StyleOsddInputs.
+Private Const OSDD_CUST_ROW As Long = 13
 
 ' ---- CAPTCHA size threshold ----
 ' A PDF under this many BYTES is treated as a CAPTCHA / block page. This
@@ -579,11 +575,11 @@ PrewarmEdgeProfiles
 LogStep "STEP 2: after PrewarmEdgeProfiles"
 
 ' The analyst's OSDD inputs, per the Operating Manual's external research
-' steps (4.7), are in the panel on Sheet1 (see StyleOsddInputs): the
+' steps (4.7), are beside the entities on Sheet1 (see StyleOsddInputs): the
 ' Negative News name, any additional addresses and telephones / emails
 ' per entity.
 If CustName <> "" Then
-ReadOsddInputs ws, OSDD_CUST_COL, CustName, custAddr, _
+ReadOsddInputs ws, OSDD_CUST_ROW, CustName, custAddr, _
 custNameNegNews, custExtraAddrs, custPhones, custEmails
 End If
 For i = CP_FIRST_ROW To CP_LAST_ROW
@@ -593,7 +589,7 @@ Set cpExtraAddrs(i) = New Collection
 Set cpPhones(i) = New Collection
 Set cpEmails(i) = New Collection
 If cpName <> "" Then
-ReadOsddInputs ws, OSDD_CUST_COL + 1 + i - CP_FIRST_ROW, cpName, cpAddr, _
+ReadOsddInputs ws, i, cpName, cpAddr, _
 cpNameNegNews(i), cpExtraAddrs(i), cpPhones(i), cpEmails(i)
 End If
 Next i
@@ -3961,49 +3957,62 @@ End Function
 '==================================================================
 ' OSDD INPUTS ON SHEET1
 '
-' A panel to the right of the form, laid out by modInstallUpdate in the
-' form's own style: a banner (a copy of the "Alert Related Information"
-' banner shape), a column-header row naming the entities - the customer
-' in W, counterparties 1-5 in X:AB - and one row per input:
-'   6     Negative News name. Blank = the name without its legal
-'         extension, middle names or suffixes (Operating Manual 4.7).
-'   7-9   up to 3 other (additional) addresses
-'   10    phone(s), 11 email(s) - several separated by ;
-' Below it, the theme picker in V13 under its own banner. Row 23 (the
-' old Counterparty 6) is hidden.
+' Beside the customer and counterparty rows, in columns V:AB (laid out by
+' modInstallUpdate):
+'   V      Listed Entity - a tick box; ticked, no Negative News search
+'   W      Negative News name. Blank = the name without its legal
+'          extension, middle names or suffixes (Operating Manual 4.7).
+'   X:Z    up to 3 other addresses
+'   AA     phone(s), AB email(s) - several separated by ;
+'   Customer:        headers row 12 (beside the Customer Information
+'                    banner), inputs row 13 (beside Customer Name)
+'   Counterparties:  headers row 17, inputs rows 18-22, each beside its
+'                    counterparty
+' The Alert Related Information rows (5-10) and banner, and the
+' Counterparty Information banner, run across to AB. Row 23 (the old
+' Counterparty 6) is hidden. Themes are chosen with Ctrl+Shift+T (the
+' theme manager's ChooseTheme), not on the sheet.
 '==================================================================
 
-' Gives the panel's cells the look of the counterparty table in whatever
-' theme is active: the header row like row 17, labels like G18, inputs
-' like T18. (The banners are shapes, so the theme styles those itself.)
-' The theme manager calls this after every theme change.
+' Gives the inputs the look of the counterparty table in whatever theme is
+' active - headers like row 17, inputs like T18 - and carries each Alert
+' Related Information row's look on from T to AB (the themes paint those
+' rows only as far as T). The banners are shapes, so the theme styles
+' those itself. The theme manager calls this after every theme change.
 Public Sub StyleOsddInputs()
-    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean
+    Dim ws As Worksheet, wasProt As Boolean, evts As Boolean, r As Long
+    Dim heads As Range, inputs As Range
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
-    If Left$(CellStr(ws.Range("V6").Value), 13) <> "Negative News" Then Exit Sub   ' not set up
+    If Left$(CellStr(ws.Range("W12").Value), 13) <> "Negative News" Then Exit Sub   ' not set up
     evts = Application.EnableEvents
     Application.EnableEvents = False
     wasProt = ws.ProtectContents
     On Error Resume Next
     If wasProt Then ws.Unprotect Password:="p7ss"
 
-    CopyLook ws.Range("T17"), ws.Range("V5:AB5")
-    With ws.Range("V5:AB5")
+    For r = 5 To 10
+        CopyLook ws.Range("T" & r), ws.Range("U" & r & ":AB" & r)
+    Next r
+
+    Set heads = ws.Range("V12:AB12,V17:AB17")
+    Set inputs = ws.Range("V13:AB13,V18:AB22")
+
+    CopyLook ws.Range("T17"), heads
+    With heads
         .HorizontalAlignment = ws.Range("T17").HorizontalAlignment
-        .VerticalAlignment = ws.Range("T17").VerticalAlignment
+        .VerticalAlignment = xlCenter
         .WrapText = False
         .ShrinkToFit = False
     End With
 
-    CopyLook ws.Range("G18"), ws.Range("V6:V11")
-    ws.Range("V6:V11").HorizontalAlignment = ws.Range("G18").HorizontalAlignment
-    ws.Range("V6:V11").VerticalAlignment = ws.Range("G18").VerticalAlignment
+    CopyLook ws.Range("T18"), inputs
+    inputs.HorizontalAlignment = ws.Range("T18").HorizontalAlignment
+    inputs.VerticalAlignment = ws.Range("T18").VerticalAlignment
+    inputs.Locked = False
+    ' The tick boxes' cells hold TRUE / FALSE; the box shows it.
+    ws.Range("V13,V18:V22").NumberFormat = ";;;"
 
-    CopyLook ws.Range("T18"), ws.Range("W6:AB11,V13")
-    ws.Range("W6:AB11,V13").HorizontalAlignment = ws.Range("T18").HorizontalAlignment
-    ws.Range("W6:AB11,V13").VerticalAlignment = ws.Range("T18").VerticalAlignment
-    ws.Range("W6:AB11,V13").Locked = False
     ws.Range("J23").MergeArea.Locked = True
     ws.Range("T23").Locked = True
 
@@ -4098,24 +4107,27 @@ Private Sub CopyEdge(ByVal b As Border, ByVal dst As Range, ByVal edge As Long)
     End If
 End Sub
 
-' One entity's OSDD inputs from its column of the panel (col = W for the
-' customer, X:AB for counterparties 1-5).
-Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal col As Long, ByVal fullName As String, _
+' One entity's OSDD inputs from its row: 13 for the customer, 18-22 for
+' counterparties 1-5. A ticked Listed Entity box (V) leaves negName empty,
+' so no Negative News search is queued.
+Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal r As Long, ByVal fullName As String, _
     ByVal mainAddr As String, ByRef negName As String, ByRef addrs As Collection, _
     ByRef phones As Collection, ByRef emails As Collection)
-    Dim typed As String, r As Long, item As Variant
+    Dim typed As String, item As Variant
 
-    negName = NormalizeSpaces(CellStr(ws.Cells(OSDD_ROW_NEG, col).Value))
-    If negName = "" Then negName = ShortenName(fullName)
+    If ws.Range("V" & r).Value = True Then
+        negName = ""
+    Else
+        negName = NormalizeSpaces(CellStr(ws.Range("W" & r).Value))
+        If negName = "" Then negName = ShortenName(fullName)
+    End If
 
-    For r = OSDD_ROW_ADDR To OSDD_ROW_ADDR + 2
-        typed = typed & ";" & CellStr(ws.Cells(r, col).Value)
-    Next r
+    typed = CellStr(ws.Range("X" & r).Value) & ";" & CellStr(ws.Range("Y" & r).Value) & ";" & _
+        CellStr(ws.Range("Z" & r).Value)
     Set addrs = New Collection
     For Each item In SplitList(typed)
         If AddrKey(CStr(item)) <> AddrKey(mainAddr) Then addrs.Add CStr(item)
     Next item
 
-    ParseContacts CellStr(ws.Cells(OSDD_ROW_PHONE, col).Value) & ";" & _
-        CellStr(ws.Cells(OSDD_ROW_EMAIL, col).Value), phones, emails
+    ParseContacts CellStr(ws.Range("AA" & r).Value) & ";" & CellStr(ws.Range("AB" & r).Value), phones, emails
 End Sub

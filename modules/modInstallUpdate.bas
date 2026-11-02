@@ -21,7 +21,10 @@ Attribute VB_Name = "modInstallUpdate"
 '     fits Sheet1 to the window on opening
 ' Step 2, Sheet1 - runs by itself once step 1 has finished, so the
 ' replaced modules are really gone:
-'   - the OSDD Search Inputs panel in V3:AB11 and the theme picker in V13
+'   - the OSDD inputs beside the customer (row 13) and each counterparty
+'     (rows 18-22) in V:AB, with a Listed Entity tick box; the Alert
+'     Related Information rows widened to AB; the theme picker hidden
+'     (Ctrl+Shift+T chooses themes)
 '     (the theme manager puts copies of the form's banner shapes over
 '     them, and the sidebar back in its 3.6.1 places, on every theme
 '     change); gaps, column T and the panel narrowed and the text set to
@@ -35,15 +38,15 @@ Option Explicit
 
 Private Const PWD As String = "p7ss"
 Private Const PICKER_OLD As String = "U28"
-Private Const PICKER_NEW As String = "V13"
+Private Const PICKER_NEW As String = "AD1"     ' hidden - themes are chosen with Ctrl+Shift+T
 Private Const SELF As String = "modInstallUpdate"
 ' The procedure's Negative News string, in two parts: a formula's text
 ' can only be 255 characters at a time.
 Private Const NEG1 As String = """ AND (arrest OR corruption OR sentencing OR money laundering OR AML OR launder OR embezzle OR evas OR evad OR crime OR corrupt OR bribe OR theft OR extort OR drug OR traffic OR trafficking OR felony OR sanction OR counterfeit OR terror OR """
 Private Const NEG2 As String = """investigat*, indict*, charge?, court, lawsuit, judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"""
-Private Const SHEET_HOOK_MARK As String = "' (Search Matrix brings its links up to date when it is opened.)"
+Private Const SHEET_HOOK_MARK As String = "' (Inputs V13:AB13, V18:AB22. Search Matrix updates its links when opened.)"
 Private Const RESET_LINE As String = _
-    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, W6:AB11"").Value = """""
+    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, V13:AB13, V18:AB22"").Value = """""
 
 '------------------------------------------------------------------
 ' STEP 1 - the code
@@ -205,7 +208,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     Dim nPicker As Long, nReset As Long, nResetDone As Long, nNarr As Long, nRenLoop As Long
     Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long, nNavy As Long
     Dim nNavyBtn As Long, nNavyTitle As Long, hasFindButton As Boolean
-    Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean
+    Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean, nAlertRows As Long
     Dim openNote As String, out As String, smNote As String
 
     For Each comp In proj.VBComponents
@@ -226,8 +229,9 @@ Private Function PatchCode(ByVal proj As Object) As String
                 t = Trim$(ln)
                 ind = Space$(Len(ln) - Len(LTrim$(ln)))
 
-                If Left$(t, 1) <> "'" And InStr(ln, """" & PICKER_OLD & """") > 0 Then
-                    cm.ReplaceLine i, Replace(ln, """" & PICKER_OLD & """", """" & PICKER_NEW & """")
+                If Left$(t, 1) <> "'" And (InStr(ln, """" & PICKER_OLD & """") > 0 Or InStr(ln, """V13""") > 0) Then
+                    cm.ReplaceLine i, Replace(Replace(ln, """" & PICKER_OLD & """", """" & PICKER_NEW & """"), _
+                        """V13""", """" & PICKER_NEW & """")
                     nPicker = nPicker + 1
                 ElseIf Left$(t, 62) = Left$(RESET_LINE, 62) And Right$(t, 11) = ".Value = """"" Then
                     If t = RESET_LINE Then
@@ -244,6 +248,11 @@ Private Function PatchCode(ByVal proj As Object) As String
                         cm.ReplaceLine i, Replace(ln, "To 6", "To 5")
                         nRenLoop = nRenLoop + 1
                     End If
+                ElseIf t = "Set ProgNameRange = Range(""J7:T7"")" Or t = "Set EscScenarioRange = Range(""J8:T8"")" Then
+                    ' Sheet1's greying of Program Name / Escalation Scenario: the
+                    ' rows now run to AB.
+                    cm.ReplaceLine i, Replace(Replace(ln, ":T7""", ":AB7"""), ":T8""", ":AB8""")
+                    nAlertRows = nAlertRows + 1
                 ElseIf t = "ElseIf Val(entityChoice) >= 1 And Val(entityChoice) <= 6 Then" Then
                     cm.ReplaceLine i, Replace(ln, "<= 6", "<= 5")
                     nRenPick = nRenPick + 1
@@ -271,6 +280,13 @@ Private Function PatchCode(ByVal proj As Object) As String
                     ' Navy & Gold's Search Matrix bands one entity block at a time.
                     cm.ReplaceLine i, Replace(ln, "= 5 ", "= 13")
                     nBlock = nBlock + 1
+                ElseIf needSheetHook And t = "' OSDD panel (Module2): an email typed there turns into a link and takes" Then
+                    ' The second hook (9 lines, the old panel's range): replace it.
+                    cm.DeleteLines i, 9
+                    cm.InsertLines i, SheetHook(ind)
+                    needSheetHook = False
+                    nSheetHook = nSheetHook + 1
+                    i = i + 7
                 ElseIf needSheetHook And t = "' OSDD panel (Module2): an email typed there turns into a link and" Then
                     ' The earlier hook (10 lines): replace it.
                     cm.DeleteLines i, 10
@@ -279,7 +295,7 @@ Private Function PatchCode(ByVal proj As Object) As String
                     nSheetHook = nSheetHook + 1
                     i = i + 7
                 ElseIf needSheetHook And t = "Me.Unprotect Password:=""p7ss""" Then
-                    If InStr(cm.Lines(1, cm.CountOfLines), "' OSDD panel (Module2): an email typed there turns into a link and") = 0 Then
+                    If InStr(cm.Lines(1, cm.CountOfLines), "' OSDD panel (Module2): an email typed there turns into a link") = 0 Then
                         cm.InsertLines i + 1, SheetHook(ind)
                         needSheetHook = False
                         nSheetHook = nSheetHook + 1
@@ -320,22 +336,40 @@ Private Function PatchCode(ByVal proj As Object) As String
         End If
     End If
 
-    ' ThisWorkbook: fit Sheet1 to the window on opening.
+    ' ThisWorkbook: fit Sheet1 to the window on opening, and Ctrl+Shift+T for
+    ' the theme chooser (let go again on closing, so the shortcut does not
+    ' reopen the workbook).
     Set cm = proj.VBComponents("ThisWorkbook").CodeModule
     t = ""
     If cm.CountOfLines > 0 Then t = cm.Lines(1, cm.CountOfLines)
-    If InStr(t, "FitSheet1ToWindow") > 0 Then
+    If InStr(t, "ChooseTheme") > 0 Then
         openNote = "already there"
+    ElseIf InStr(t, "    Application.Run ""FitSheet1ToWindow""") > 0 Then
+        ' Our earlier Workbook_Open: add the shortcut after the fit.
+        For i = 1 To cm.CountOfLines
+            If cm.Lines(i, 1) = "    Application.Run ""FitSheet1ToWindow""" Then
+                cm.InsertLines i + 1, "    Application.OnKey ""^+t"", ""ChooseTheme""   ' Ctrl+Shift+T: themes"
+                Exit For
+            End If
+        Next i
+        openNote = "shortcut added"
     ElseIf InStr(t, "Sub Workbook_Open(") > 0 Then
-        openNote = "NOT DONE - ThisWorkbook has its own Workbook_Open: add  Application.Run ""FitSheet1ToWindow""  to it by hand"
+        openNote = "NOT DONE - ThisWorkbook has its own Workbook_Open: add  Application.Run ""FitSheet1ToWindow""" & _
+            "  and  Application.OnKey ""^+t"", ""ChooseTheme""  to it by hand"
     Else
         cm.AddFromString vbCrLf & "' Fit Sheet1 to this screen (Module2 FitSheet1ToWindow)." & vbCrLf & _
             "Private Sub Workbook_Open()" & vbCrLf & "    On Error Resume Next" & vbCrLf & _
-            "    Application.Run ""FitSheet1ToWindow""" & vbCrLf & "End Sub"
+            "    Application.Run ""FitSheet1ToWindow""" & vbCrLf & _
+            "    Application.OnKey ""^+t"", ""ChooseTheme""   ' Ctrl+Shift+T: themes" & vbCrLf & "End Sub"
         openNote = "added"
     End If
+    t = cm.Lines(1, cm.CountOfLines)
+    If InStr(t, "Sub Workbook_BeforeClose(") = 0 Then
+        cm.AddFromString vbCrLf & "Private Sub Workbook_BeforeClose(Cancel As Boolean)" & vbCrLf & _
+            "    Application.OnKey ""^+t""" & vbCrLf & "End Sub"
+    End If
 
-    out = Item(nPicker, 1, "Sheet1's code: theme picker U28 -> V13")
+    out = Item(nPicker, 1, "Sheet1's code: theme picker moved to the hidden cell " & PICKER_NEW)
     out = out & Item(nReset + nResetDone, 1, "Reset clears the OSDD panel" & IIf(nReset = 0 And nResetDone > 0, " (already)", ""))
     out = out & Item(nNarr, 1, "Narrative counterparty review: 5 counterparties")
     out = out & Item(nRenLoop, 2, "Rename: counterparty list 1-5")
@@ -348,7 +382,8 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nNavyTitle, 1, "Navy & Gold title: Beta 3.6.1")
     out = out & Item(nBlock, 1, "Navy & Gold Search Matrix: one band per entity")
     out = out & Item(nSheetHook, 1, "Sheet1's code: a link Excel makes of a typed email is taken off")
-    out = out & "   ThisWorkbook fits Sheet1 on opening: " & openNote & vbCrLf
+    out = out & Item(nAlertRows, 2, "Sheet1's code: Program Name / Escalation Scenario greying covers J:AB")
+    out = out & "   ThisWorkbook fits Sheet1 and sets Ctrl+Shift+T on opening: " & openNote & vbCrLf
     out = out & "   Search Matrix refreshes its links when opened: " & smNote & vbCrLf
     PatchCode = out
 End Function
@@ -358,12 +393,12 @@ End Function
 ' Search Matrix brings its own links up to date when it is opened.
 Private Function SheetHook(ByVal ind As String) As String
     SheetHook = _
-        ind & "' OSDD panel (Module2): an email typed there turns into a link and takes" & vbCrLf & _
-        ind & "' the link style - take the link off and put the panel's look back." & vbCrLf & _
+        ind & "' OSDD inputs (Module2): an email typed there turns into a link and takes" & vbCrLf & _
+        ind & "' the link style - take the link off and put the inputs' look back." & vbCrLf & _
         ind & SHEET_HOOK_MARK & vbCrLf & _
-        ind & "If Not Intersect(target, Me.Range(""W6:AB11"")) Is Nothing Then" & vbCrLf & _
-        ind & "    If Intersect(target, Me.Range(""W6:AB11"")).Hyperlinks.Count > 0 Then" & vbCrLf & _
-        ind & "        Intersect(target, Me.Range(""W6:AB11"")).Hyperlinks.Delete" & vbCrLf & _
+        ind & "If Not Intersect(target, Me.Range(""V13:AB13,V18:AB22"")) Is Nothing Then" & vbCrLf & _
+        ind & "    If Intersect(target, Me.Range(""V13:AB13,V18:AB22"")).Hyperlinks.Count > 0 Then" & vbCrLf & _
+        ind & "        Intersect(target, Me.Range(""V13:AB13,V18:AB22"")).Hyperlinks.Delete" & vbCrLf & _
         ind & "        Application.Run ""StyleOsddInputs""" & vbCrLf & _
         ind & "    End If" & vbCrLf & _
         ind & "End If"
@@ -381,20 +416,20 @@ End Function
 ' STEP 2 - Sheet1 (started by step 1)
 '------------------------------------------------------------------
 Public Sub InstallUpdate_Step2()
-    Dim ws As Worksheet, ws7 As Worksheet, sm As Worksheet
-    Dim labels As Variant, c As Long, f As String, themeList As String, themeVal As String, key As String
-    Dim evts As Boolean, wbProt As Boolean, smProt As Boolean, stepName As String
+    Dim ws As Worksheet, ws7 As Worksheet, cb As Object
+    Dim heads As Variant, c As Long, r As Variant, f As String, themeList As String, themeVal As String
+    Dim key As String, evts As Boolean, wbProt As Boolean, stepName As String
     Dim pickerErr As String, errNum As Long, errDesc As String
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
 
-    ' The theme and the picker's list, from wherever the picker is now.
+    ' The theme, and the picker's value and list from wherever it was.
     On Error Resume Next
     key = CStr(Application.Run("ActiveTheme"))
-    themeVal = CStr(ws.Range(PICKER_OLD).Value)
-    themeList = ws.Range(PICKER_OLD).Validation.Formula1
-    If themeVal = "" Then themeVal = CStr(ws.Range(PICKER_NEW).Value)
-    If themeList = "" Then themeList = ws.Range(PICKER_NEW).Validation.Formula1
+    For Each r In Array("U28", "V13", PICKER_NEW)
+        If themeVal = "" Then themeVal = CStr(ws.Range(r).Value)
+        If themeList = "" Then themeList = ws.Range(r).Validation.Formula1
+    Next r
     On Error GoTo 0
     If key = "" Then key = "NONE"
     If InStr(themeList, "Desert") = 0 Then themeList = "Default (no theme),Dark Blue,Desert,Navy & Gold"
@@ -407,7 +442,9 @@ Public Sub InstallUpdate_Step2()
     If wbProt Then ThisWorkbook.Unprotect Password:=PWD
     ws.Unprotect Password:=PWD
 
-    stepName = "clearing the old panel (V3:AB28) and picker (U27:U28)"
+    ' Whatever earlier layouts put to the right of the form, and the old
+    ' visible theme picker, cleared.
+    stepName = "clearing the old layout (V3:AB28, U27:U28)"
     With ws.Range("V3:AB28")
         .UnMerge
         .Validation.Delete
@@ -416,10 +453,27 @@ Public Sub InstallUpdate_Step2()
     ws.Range("U27:U28").Validation.Delete
     ws.Range("U27:U28").Clear
     PlainLook ws.Range("V3:AB28,U27:U28"), ws.Range("U26")
+    For Each r In Array(13, 14, 18, 19, 20, 21, 22)
+        On Error Resume Next
+        ws.Shapes("OSDD Listed " & r).Delete
+        On Error GoTo Fail
+    Next r
+
+    ' The Alert Related Information rows run across to AB, like the banner
+    ' over them (the theme manager widens that). Each row's value cell is
+    ' still J5-J10, so Sheet7's tags and everything else reading them is
+    ' unaffected.
+    stepName = "widening the Alert Related Information rows to AB"
+    Application.DisplayAlerts = False
+    For c = 5 To 10
+        ws.Range("J" & c & ":AB" & c).UnMerge
+        ws.Range("J" & c & ":AB" & c).Merge
+    Next c
+    Application.DisplayAlerts = True
 
     ' Row 23 (the old Counterparty 6) emptied, locked and hidden. The theme
-    ' manager gives the sidebar buttons fixed sizes, so hiding it no longer
-    ' squashes PDF Merge.
+    ' manager gives the sidebar buttons fixed sizes, so hiding it does not
+    ' squash PDF Merge.
     stepName = "hiding row 23 (the old Counterparty 6)"
     ws.Range("G23").MergeArea.ClearContents
     ws.Range("J23").MergeArea.ClearContents
@@ -429,52 +483,66 @@ Public Sub InstallUpdate_Step2()
     ws.Range("T23").Locked = True
     ws.Rows(23).Hidden = True
 
-    ' The panel: a column-header row like the counterparty table's (row 17)
-    ' and five input rows, rows 5-10 beside the Alert Related Information
-    ' rows.
-    stepName = "building the panel (V5:AB11)"
-    ' Narrow gaps either side of the form and a narrower address column and
-    ' panel, so the whole sheet fits the window at a larger zoom.
+    ' The OSDD inputs, beside the entities they are for: headers on row 12
+    ' (beside the Customer Information banner) and the customer's inputs on
+    ' row 13 (beside Customer Name); headers on row 17 and each
+    ' counterparty's inputs on its own row, 18-22.
+    stepName = "laying out the OSDD inputs (V12:AB22)"
     ws.Columns("V:AB").Hidden = False
     ws.Columns("F").ColumnWidth = 1.55
     ws.Columns("T").ColumnWidth = 36
     ws.Columns("U").ColumnWidth = 1.55
-    ws.Columns("V").ColumnWidth = 15
-    ws.Columns("W:AB").ColumnWidth = 12.5
-    ' Short headers and labels, so none of them has to shrink to fit; the
-    ' names are beside them on the form.
-    ws.Range("V5").Value = "Input"
-    ws.Range("W5").Value = "Customer"
-    For c = 1 To 5
-        ws.Cells(5, 23 + c).Value = "CP " & c
+    ws.Columns("V").ColumnWidth = 12
+    ws.Columns("W").ColumnWidth = 16
+    ws.Columns("X:Z").ColumnWidth = 13
+    ws.Columns("AA").ColumnWidth = 12
+    ws.Columns("AB").ColumnWidth = 16
+    heads = Array("Listed Entity", "Negative News", "Other Address 1", "Other Address 2", "Other Address 3", _
+        "Phone", "Email")
+    For c = 0 To 6
+        ws.Cells(12, 22 + c).Value = heads(c)
+        ws.Cells(17, 22 + c).Value = heads(c)
     Next c
-    labels = Array("Negative News", "Other Address 1", "Other Address 2", "Other Address 3", "Phone", "Email")
-    For c = 0 To 5
-        ws.Cells(6 + c, 22).Value = labels(c)
-    Next c
-    InputTip ws.Range("W6:AB6"), "Negative News", _
+    InputTip ws.Range("W13,W18:W22"), "Negative News", _
         "Leave blank to search the name without legal extensions (LLC, Inc...), middle names " & _
         "or suffixes, as the procedure asks - or type the name to search."
-    InputTip ws.Range("W7:AB9"), "Other Address", _
+    InputTip ws.Range("X13:Z13,X18:Z22"), "Other Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
-    InputTip ws.Range("W10:AB10"), "Phone", _
+    InputTip ws.Range("AA13,AA18:AA22"), "Phone", _
         "Each number gets its own search. Several? Separate them with ;"
-    InputTip ws.Range("W11:AB11"), "Email", _
+    InputTip ws.Range("AB13,AB18:AB22"), "Email", _
         "Each email address gets its own search. Several? Separate them with ;"
-    ' One readable text size for the whole form and panel (it was 8 to 9).
-    ws.Range("G5:T10,G13:T14,G17:T22,G26:T27,V5:AB11,V13").Font.Size = 10
+    ' One readable text size for the whole form and the inputs (it was 8-9).
+    ws.Range("G5:AB10,G13:T14,G17:T22,G26:T27,V12:AB13,V17:AB22").Font.Size = 10
+
+    ' Listed Entity: a tick box per entity. Ticked, OSDD Search and Search
+    ' Matrix leave out that entity's Negative News search.
+    stepName = "adding the Listed Entity tick boxes"
+    For Each r In Array(13, 18, 19, 20, 21, 22)
+        ws.Range("V" & r).Locked = False
+        With ws.Range("V" & r)
+            Set cb = ws.CheckBoxes.Add(.Left + (.Width - 14) / 2, .Top + (.Height - 14) / 2, 14, 14)
+        End With
+        cb.Name = "OSDD Listed " & r
+        cb.Caption = ""
+        cb.LinkedCell = "$V$" & r
+        cb.Value = xlOff
+        cb.Locked = False
+        cb.Placement = xlMove
+    Next r
 
     ' Risk colours on the country risk cells (PDF Risk Class R27, Excel Risk
     ' Class T27): solid fills with their own text colour, so they read the
-    ' same in every theme. They were faint dotted fills under the theme's
-    ' text colour - Medium came out yellow on yellow.
+    ' same in every theme.
     stepName = "colouring the country risk cells"
     RiskColours ws.Range("R27:S27")
     RiskColours ws.Range("T27")
 
-    stepName = "moving the theme picker to " & PICKER_NEW
+    ' The theme picker, out of sight: themes are chosen with Ctrl+Shift+T.
+    stepName = "hiding the theme picker (" & PICKER_NEW & ")"
     ws.Range(PICKER_NEW).Value = themeVal
     pickerErr = PickerList(ws.Range(PICKER_NEW), themeList)
+    Application.OnKey "^+t", "ChooseTheme"
 
     stepName = "updating Sheet7 and Search Matrix"
     Set ws7 = ThisWorkbook.Sheets("Sheet7")
@@ -493,23 +561,24 @@ Public Sub InstallUpdate_Step2()
     Application.EnableEvents = evts
 
     ' The current theme again. The theme manager first puts the sidebar
-    ' back in its 3.6.1 places and copies the form's banner shapes over the
-    ' panel and the picker, so the theme styles them like the rest; then
-    ' the panel's cells take its colours and Sheet1 is fitted to the window.
+    ' back in its 3.6.1 places and copies the tables' banner shapes over the
+    ' inputs, so the theme styles them like the rest; then the inputs take
+    ' its colours and Sheet1 is fitted to the window.
     Application.Run "ApplyThemeByKey", key
     Application.Run "StyleOsddInputs"
     Application.Run "RefreshOsddMatrix"
     Application.Run "FitSheet1ToWindow"
     On Error GoTo 0
 
-    MsgBox "Step 2 of 2 done - Sheet1: OSDD Search Inputs panel in V3:AB11 and the theme picker " & _
-        "in V13, both under banners like the form's; row 23 hidden; text at one size; Sheet7 on 5 " & _
-        "counterparties." & vbCrLf & vbCrLf & _
+    MsgBox "Step 2 of 2 done - Sheet1: OSDD inputs beside the customer (row 13) and each counterparty " & _
+        "(rows 18-22) in columns V:AB, with a Listed Entity tick box; the Alert Related Information " & _
+        "block runs across to AB; row 23 hidden; text at one size; Sheet7 on 5 counterparties." & _
+        vbCrLf & vbCrLf & _
+        "Themes: Ctrl+Shift+T (nothing on the sheet any more)." & vbCrLf & vbCrLf & _
         "Search Matrix: " & IIf(CStr(ThisWorkbook.Sheets("Search Matrix").Range("B5").Value) = "Other Address 1", _
             "rebuilt - 13 searches per entity (customer and CP 1-5), rows 2 to 79.", _
             "NOT rebuilt - send a screenshot of this message.") & vbCrLf & vbCrLf & _
-        IIf(pickerErr = "", "", "The theme dropdown couldn't be added (" & pickerErr & "). Run " & _
-            "BuildThemePicker once to add it." & vbCrLf & vbCrLf) & _
+        IIf(pickerErr = "", "", "(The hidden theme list couldn't be set: " & pickerErr & ")" & vbCrLf & vbCrLf) & _
         "Now: Debug > Compile VBAProject, save the workbook, and delete modInstallUpdate.", _
         vbInformation, "Install Update"
     Exit Sub
@@ -536,7 +605,7 @@ End Sub
 Private Sub BuildOsddSearchMatrix()
     Dim sm As Worksheet, smProt As Boolean, b As Long, k As Long, r As Long, s As Long
     Dim nm As String, ad As String, pc As String, ent As String, lbl As String
-    Dim kinds As Variant, fileKinds As Variant, panelCols As Variant, q As String, oa As String
+    Dim kinds As Variant, fileKinds As Variant, q As String, oa As String, er As Long
 
     Set sm = ThisWorkbook.Sheets("Search Matrix")
     smProt = sm.ProtectContents
@@ -557,11 +626,13 @@ Private Sub BuildOsddSearchMatrix()
     fileKinds = Array("Google", "Address", "Google+Address", "Address 2", "Google+Address 2", _
         "Address 3", "Google+Address 3", "Address 4", "Google+Address 4", _
         "Telephone", "Email", "Negative News 1", "Negative News 2")
-    panelCols = Array("W", "X", "Y", "Z", "AA", "AB")
 
     For b = 0 To 5
         s = 2 + b * 13
-        pc = "Sheet1!$" & panelCols(b) & "$"
+        ' This entity's OSDD inputs on Sheet1: row 13 for the customer, its
+        ' own row for a counterparty; Listed V, Negative News W, other
+        ' addresses X:Z, phone AA, email AB.
+        er = IIf(b = 0, 13, 17 + b)
         If b = 0 Then
             nm = "Sheet1!$J$13": ad = "Sheet1!$J$14": ent = "Customer"
             lbl = "=IF(" & nm & "="""",""Customer""," & nm & "&"" (Customer)"")"
@@ -576,20 +647,24 @@ Private Sub BuildOsddSearchMatrix()
                 Case 1: q = "=IF(" & ad & "="""",""""," & ad & ")"
                 Case 2: q = "=IF(OR(" & nm & "=""""," & ad & "=""""),""""," & nm & "&"" + ""&" & ad & ")"
                 Case 3, 5, 7
-                    oa = pc & (7 + (k - 3) \ 2)
+                    oa = "Sheet1!$" & Choose((k - 1) \ 2, "X", "Y", "Z") & "$" & er
                     q = "=IF(OR(" & nm & "=""""," & oa & "=""""),""""," & oa & ")"
                 Case 4, 6, 8
-                    oa = pc & (7 + (k - 4) \ 2)
+                    oa = "Sheet1!$" & Choose((k - 2) \ 2, "X", "Y", "Z") & "$" & er
                     q = "=IF(OR(" & nm & "=""""," & oa & "=""""),""""," & nm & "&"" + ""&" & oa & ")"
                 Case 9
-                    q = "=IF(OR(" & nm & "=""""," & pc & "10=""""),"""",SUBSTITUTE(SUBSTITUTE(TRIM(" & pc & _
-                        "10),""; "","";""),"";"","" OR ""))"
+                    oa = "Sheet1!$AA$" & er
+                    q = "=IF(OR(" & nm & "=""""," & oa & "=""""),"""",SUBSTITUTE(SUBSTITUTE(TRIM(" & oa & _
+                        "),""; "","";""),"";"","" OR ""))"
                 Case 10
-                    q = "=IF(OR(" & nm & "=""""," & pc & "11=""""),"""",CHAR(34)&SUBSTITUTE(SUBSTITUTE(TRIM(" & _
-                        pc & "11),""; "","";""),"";"",CHAR(34)&"" OR ""&CHAR(34))&CHAR(34))"
+                    oa = "Sheet1!$AB$" & er
+                    q = "=IF(OR(" & nm & "=""""," & oa & "=""""),"""",CHAR(34)&SUBSTITUTE(SUBSTITUTE(TRIM(" & _
+                        oa & "),""; "","";""),"";"",CHAR(34)&"" OR ""&CHAR(34))&CHAR(34))"
                 Case 11, 12
-                    q = "=IF(" & nm & "="""","""",CHAR(34)&IF(" & pc & "6=""""," & nm & "," & pc & "6)&CHAR(34)&" & _
-                        NEG1 & "&" & NEG2 & ")"
+                    ' None for a listed entity (its tick box on Sheet1, column V).
+                    oa = "Sheet1!$W$" & er
+                    q = "=IF(OR(" & nm & "="""",Sheet1!$V$" & er & "=TRUE),"""",CHAR(34)&IF(" & oa & "=""""," & _
+                        nm & "," & oa & ")&CHAR(34)&" & NEG1 & "&" & NEG2 & ")"
             End Select
             sm.Range("A" & r).Formula = lbl
             sm.Range("B" & r).Value = kinds(k)
