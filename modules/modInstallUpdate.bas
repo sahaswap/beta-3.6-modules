@@ -453,7 +453,7 @@ Public Sub InstallUpdate_Step2()
     Dim ws As Worksheet, ws7 As Worksheet, cb As Object
     Dim heads As Variant, c As Long, r As Variant, f As String, themeList As String, themeVal As String
     Dim key As String, evts As Boolean, wbProt As Boolean, stepName As String
-    Dim pickerErr As String, errNum As Long, errDesc As String
+    Dim pickerErr As String, errNum As Long, errDesc As String, tagNote As String
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
 
@@ -660,6 +660,8 @@ Public Sub InstallUpdate_Step2()
     On Error GoTo Fail
     stepName = "rebuilding Search Matrix"
     BuildOsddSearchMatrix
+    stepName = "adding Sheet7's [Country Risk] tag"
+    tagNote = CountryRiskTag()
     On Error Resume Next
 
     ws.Protect Password:=PWD
@@ -685,6 +687,7 @@ Public Sub InstallUpdate_Step2()
         "Search Matrix: " & IIf(CStr(ThisWorkbook.Sheets("Search Matrix").Range("B5").Value) = "Other Address 1", _
             "rebuilt - 13 searches per entity (customer and CP 1-5), rows 2 to 79.", _
             "NOT rebuilt - send a screenshot of this message.") & vbCrLf & vbCrLf & _
+        tagNote & vbCrLf & vbCrLf & _
         IIf(pickerErr = "", "", "(The hidden theme list couldn't be set: " & pickerErr & ")" & vbCrLf & vbCrLf) & _
         "Now: Debug > Compile VBAProject, save the workbook, and delete modInstallUpdate.", _
         vbInformation, "Install Update"
@@ -839,6 +842,62 @@ Private Function PickerList(ByVal rng As Range, ByVal list As String) As String
         End If
         PickerList = "error " & Err.Number & ": " & Err.Description
     Next attempt
+End Function
+
+' Sheet7's [Country Risk] tag, added if it isn't there and pointed at
+' wherever the country table's cells are: the PDF Risk Class first, the
+' Excel Risk Class when the PDF has none (blank, N/A or 0), then the ISO
+' Code 2 in brackets - e.g. "High (CY)". Generate Narrative fills every
+' Sheet7 tag into the template, so a template that says [Country Risk]
+' gets it. Returns a line for the closing message saying which templates
+' use it.
+Private Function CountryRiskTag() As String
+    Dim ws As Worksheet, ws7 As Worksheet, wt As Worksheet, c As Range
+    Dim pdf As String, xl As String, iso As String, f As String, r As Long, tagRow As Long
+    Dim users As String
+
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    Set ws7 = ThisWorkbook.Sheets("Sheet7")
+    For Each c In ws.Range("G26:AB26").Cells
+        Select Case LCase$(Replace(Trim$(CStr(c.Value)), " ", ""))
+            Case "pdfriskclass": pdf = "Sheet1!$" & Split(c.Address, "$")(1) & "$27"
+            Case "excelriskclass": xl = "Sheet1!$" & Split(c.Address, "$")(1) & "$27"
+            Case "isocode2": iso = "Sheet1!$" & Split(c.Address, "$")(1) & "$27"
+        End Select
+    Next c
+    If pdf = "" Or xl = "" Or iso = "" Then
+        CountryRiskTag = "[Country Risk] tag: NOT DONE - the country table's headers weren't found on row 26."
+        Exit Function
+    End If
+    f = "=IF(OR(" & pdf & "=""""," & pdf & "=""N/A""," & pdf & "=0),IF(OR(" & xl & "=""""," & xl & "=0),""""," & _
+        xl & "&IF(" & iso & "="""",""""," & """ (""&" & iso & "&"")""))," & _
+        pdf & "&IF(" & iso & "="""",""""," & """ (""&" & iso & "&"")""))"
+
+    On Error Resume Next
+    ws7.Unprotect Password:=PWD
+    On Error GoTo 0
+    For r = 1 To ws7.Cells(ws7.Rows.Count, "J").End(xlUp).Row
+        If Trim$(CStr(ws7.Cells(r, "J").Value)) = "[Country Risk]" Then tagRow = r: Exit For
+    Next r
+    If tagRow = 0 Then tagRow = ws7.Cells(ws7.Rows.Count, "J").End(xlUp).Row + 1
+    ws7.Cells(tagRow, "J").Value = "[Country Risk]"
+    ws7.Cells(tagRow, "K").Formula = f
+
+    ' Which narrative templates say [Country Risk].
+    On Error Resume Next
+    Set wt = ThisWorkbook.Sheets("Template_DB")
+    On Error GoTo 0
+    If Not wt Is Nothing Then
+        For r = 1 To wt.Cells(wt.Rows.Count, "A").End(xlUp).Row
+            If InStr(1, CStr(wt.Cells(r, "B").Value), "[Country Risk]", vbTextCompare) > 0 Then
+                users = users & IIf(users = "", "", ", ") & Trim$(CStr(wt.Cells(r, "A").Value))
+            End If
+        Next r
+    End If
+    CountryRiskTag = "[Country Risk] tag: Sheet7 row " & tagRow & ", reading " & pdf & " / " & xl & " / " & iso & _
+        "." & vbCrLf & IIf(users = "", "No narrative template says [Country Risk] yet - put [Country Risk] where " & _
+        "the rating should appear (SetNonEscalationTemplate's Non-Escalation template has it).", _
+        "Templates that use it: " & users & ".")
 End Function
 
 ' Unmerges each merged block that has a cell in rng - that block only,
