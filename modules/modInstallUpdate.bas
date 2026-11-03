@@ -534,18 +534,15 @@ Public Sub InstallUpdate_Step2()
     ' The OSDD inputs, beside the entities they are for, under banners the
     ' theme manager copies from the tables' own (rows 12 and 16): headers
     ' on row 13 and the customer's inputs on row 14; headers on row 17 and
-    ' each counterparty's inputs on its own row, 18-22. The columns are
-    ' wide enough for each header at 10pt bold.
+    ' each counterparty's inputs on its own row, 18-22.
     stepName = "laying out the OSDD inputs (V13:AB22)"
     ws.Columns("V:AB").Hidden = False
     ws.Columns("F").ColumnWidth = 1.55
     ws.Columns("T").ColumnWidth = 36
     ws.Columns("U").ColumnWidth = 1.55
-    ws.Columns("V").ColumnWidth = 14
-    ws.Columns("W").ColumnWidth = 16
-    ws.Columns("X:Z").ColumnWidth = 16
-    ws.Columns("AA").ColumnWidth = 13
-    ws.Columns("AB").ColumnWidth = 18
+    ' Seven equal input columns, as wide together as the form (G:T), so the
+    ' paired banners on rows 12 and 16 mirror each other.
+    ws.Columns("V:AB").ColumnWidth = 16.5
     heads = Array("Listed Entity", "Negative News", "Other Address 1", "Other Address 2", "Other Address 3", _
         "Phone", "Email")
     For c = 0 To 6
@@ -580,10 +577,38 @@ Public Sub InstallUpdate_Step2()
         cb.Placement = xlMove
     Next r
 
+    ' Even rows: every data row and gap 18pt, every banner row 30pt (the
+    ' Alert banner's row 4 like the others, with row 3 a gap above it).
+    stepName = "evening out the rows"
+    ws.Rows(3).RowHeight = 12
+    For Each r In Array(4, 12, 16, 25)
+        ws.Rows(r).RowHeight = 30
+    Next r
+    For Each r In Array(5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 21, 22, 24, 26, 27, 28)
+        ws.Rows(r).RowHeight = 18
+    Next r
+
+    ' Everything centred, across and down.
+    stepName = "centring the form"
+    With ws.Range("G5:AB10,G13:T14,G17:T22,G26:AB27,V13:AB14,V17:AB22")
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    ' Phones as text, so a number keeps its digits (not 5.41169E+11).
+    For Each r In Array(14, 18, 19, 20, 21, 22)
+        With ws.Range("AA" & r)
+            .NumberFormat = "@"
+            If Not IsEmpty(.Value) And IsNumeric(.Value) Then .Value = CStr(.Value)
+        End With
+    Next r
+
     ' Risk colours on the country risk cells (PDF Risk Class R27, Excel Risk
     ' Class T27): solid fills with their own text colour, so they read the
-    ' same in every theme.
+    ' same in every theme. Every older rule on those rows goes first - the
+    ' original dotted ones covered R27:S28 and T27:T28.
     stepName = "colouring the country risk cells"
+    ws.Range("R27:AB28").FormatConditions.Delete
     RiskColours ws.Range("R27:S27")
     RiskColours ws.Range("T27:AB27")
 

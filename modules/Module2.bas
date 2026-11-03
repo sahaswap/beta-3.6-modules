@@ -4009,7 +4009,7 @@ Public Sub StyleOsddInputs()
     Next r
     With heads
         .HorizontalAlignment = xlCenter
-        .VerticalAlignment = ws.Range("T17").VerticalAlignment
+        .VerticalAlignment = xlCenter
         .WrapText = False
         .ShrinkToFit = False
     End With
@@ -4020,8 +4020,10 @@ Public Sub StyleOsddInputs()
     ' Row 23 is hidden, and the line under Counterparty 5 is drawn from the
     ' bottom of row 23 (as the table's own is): give V23:AB23 the same.
     CopyLook ws.Range("T23"), ws.Range("V23:AB23")
-    inputs.HorizontalAlignment = ws.Range("T18").HorizontalAlignment
-    inputs.VerticalAlignment = ws.Range("T18").VerticalAlignment
+    inputs.HorizontalAlignment = xlCenter
+    inputs.VerticalAlignment = xlCenter
+    ' Phones as text, so a typed number keeps its digits.
+    ws.Range("AA14,AA18:AA22").NumberFormat = "@"
     inputs.Locked = False
     ' The tick boxes' cells hold TRUE / FALSE; the box shows it.
     ws.Range("V14,V18:V22").NumberFormat = ";;;"

@@ -512,6 +512,7 @@ Private Sub RestoreSheet1Baseline()
     Dim ws As Worksheet, wasProt As Boolean, shp As Shape, spec As Variant, s As Variant
     Dim key As String, k As Long, stack As Variant, top0 As Single, foot As Single, gap As Single
     Const BTN_H As Single = 28.6
+    Const BANNER_H As Single = 24.7
 
     On Error Resume Next
     Set ws = ThisWorkbook.Sheets(SHEET_NAME)
@@ -570,6 +571,16 @@ Private Sub RestoreSheet1Baseline()
     ' earlier layouts go.
     ws.Shapes("Rectangle: Single Corner Snipped OSDD").Delete
     ws.Shapes("Rectangle: Single Corner Snipped Theme").Delete
+    ' Every banner the same height, centred in its own row.
+    For Each s In Array(Array("Alert Related Information", 4), Array("Customer Information", 12), _
+        Array("Counterparty Information", 16), Array("Country Risk Rating", 25))
+        Set shp = PlainBanner(ws, CStr(s(0)))
+        If Not shp Is Nothing Then
+            shp.Height = BANNER_H
+            shp.Top = ws.Rows(s(1)).Top + (ws.Rows(s(1)).Height - BANNER_H) / 2
+        End If
+        Set shp = Nothing
+    Next s
     If Left$(CStr(ws.Range("W13").Value), 13) = "Negative News" Then
         StretchBanner ws, "Alert Related Information", "AB"
         StretchBanner ws, "Country Risk Rating", "AB"
