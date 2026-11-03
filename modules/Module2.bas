@@ -3717,15 +3717,14 @@ End Sub
 ' Every search below saves SEARCH_PAGES page(s) of results (one), and
 ' Negative News two:
 '   - Name, as recorded;
-'   - Name without its non-essential elements (legal extension, or middle
-'     names / initials and suffixes), when that differs - the broadened
-'     name search;
 '   - Address, for the address on Sheet1 and each additional address;
 '   - Name + Address, for each of those addresses;
 '   - Telephone, for each number given;
 '   - Email, for each address given (searched as an exact phrase);
 '   - Negative News: the procedure string with the Negative News name,
-'     which leaves out the non-essential name elements.
+'     which leaves out the non-essential name elements (legal extension,
+'     middle names / initials, suffixes) - the only search that uses the
+'     shortened name.
 ' Files: <prefix><n>_<kind>.pdf, page 2 as "<kind> p2".
 ' ==========================================================
 Private Sub QueueEntitySearches(ByVal tasks As Collection, ByVal folder As String, _
@@ -3733,17 +3732,12 @@ Private Sub QueueEntitySearches(ByVal tasks As Collection, ByVal folder As Strin
     ByVal negName As String, ByVal negWords As String, ByVal mainAddr As String, _
     ByVal extraAddrs As Collection, ByVal phones As Collection, ByVal emails As Collection)
 
-    Dim n As Long, shortName As String, addrs As Collection, item As Variant, k As Long, tag As String
+    Dim n As Long, addrs As Collection, item As Variant, k As Long, tag As String
 
     If fullName = "" Then Exit Sub
     n = 1
 
     QueueSearch tasks, fullName, folder, prefix, n, "Google", "Google name", label, SEARCH_PAGES
-    shortName = negName
-    If shortName = "" Then shortName = ShortenName(fullName)
-    If shortName <> "" And StrComp(shortName, fullName, vbTextCompare) <> 0 Then
-        QueueSearch tasks, shortName, folder, prefix, n, "Google short name", "Google name (shortened)", label, SEARCH_PAGES
-    End If
 
     Set addrs = New Collection
     If mainAddr <> "" Then addrs.Add mainAddr
