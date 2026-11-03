@@ -40,27 +40,27 @@ Sub SetupCountryIsoDropdowns()
     Err.Clear
     Dim grey As Long: grey = ws.Range("G27").Interior.Color
     ws.Range("L27").Interior.Color = grey
-    ws.Range("O27").Interior.Color = grey
+    ws.Range("T27").Interior.Color = grey
     If Err.Number <> 0 Then report = report & "- grey fill: " & Err.Description & vbCrLf
 
     ' 2. Drop the old XLOOKUP formulas (these cells become inputs).
     '    Clear the FULL merged range for L27 - clearing just the top-left
     '    of a merged cell raises "cannot change part of a merged cell".
     Err.Clear
-    ws.Range("L27:N27").ClearContents
-    ws.Range("O27").ClearContents
+    ws.Range("L27:S27").ClearContents
+    ws.Range("T27").ClearContents
     If Err.Number <> 0 Then report = report & "- clear formulas: " & Err.Description & vbCrLf
 
     ' 3. Unlock so they're typeable under protection.
     Err.Clear
-    ws.Range("L27:N27").Locked = False
-    ws.Range("O27").Locked = False
+    ws.Range("L27:S27").Locked = False
+    ws.Range("T27").Locked = False
     If Err.Number <> 0 Then report = report & "- unlock: " & Err.Description & vbCrLf
 
     ' 4. List dropdowns, configured the same way as G27's.
-    Err.Clear: SetListValidation ws.Range("L27:N27"), "=$P$37:$P$290"
+    Err.Clear: SetListValidation ws.Range("L27:S27"), "=$P$37:$P$290"
     If Err.Number <> 0 Then report = report & "- ISO2 dropdown: " & Err.Description & vbCrLf
-    Err.Clear: SetListValidation ws.Range("O27"), "=$Q$37:$Q$290"
+    Err.Clear: SetListValidation ws.Range("T27"), "=$Q$37:$Q$290"
     If Err.Number <> 0 Then report = report & "- ISO3 dropdown: " & Err.Description & vbCrLf
 
     ' 5. Re-protect (ignore "already protected" quirks).

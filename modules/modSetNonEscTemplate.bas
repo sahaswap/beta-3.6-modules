@@ -181,8 +181,8 @@ Sub SetNonEscalationTemplate()
     If tagRow = 0 Then tagRow = lastRow + 1
     ws7.Cells(tagRow, "J").Value = "[Country Risk]"
     ws7.Cells(tagRow, "K").Formula = _
-        "=IF(OR(Sheet1!$R$27="""",Sheet1!$R$27=""N/A"",Sheet1!$R$27=0),IF(OR(Sheet1!$T$27="""",Sheet1!$T$27=0),"""",Sheet1!$T$27&IF(Sheet1!$L$27="""","""","" (""&Sheet1!$L$27&"")""))" & _
-        ",Sheet1!$R$27&IF(Sheet1!$L$27="""","""","" (""&Sheet1!$L$27&"")""))"
+        "=IF(OR(Sheet1!$X$27="""",Sheet1!$X$27=""N/A"",Sheet1!$X$27=0),IF(OR(Sheet1!$AA$27="""",Sheet1!$AA$27=0),"""",Sheet1!$AA$27&IF(Sheet1!$L$27="""","""","" (""&Sheet1!$L$27&"")""))" & _
+        ",Sheet1!$X$27&IF(Sheet1!$L$27="""","""","" (""&Sheet1!$L$27&"")""))"
 
     MsgBox "Non-Escalation template (Individual / Entity) written to Template_DB!B" & keyRow & "." & vbCrLf & _
            "[Country Risk] tag added to Sheet7 row " & tagRow & "." & vbCrLf & vbCrLf & _

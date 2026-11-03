@@ -255,7 +255,7 @@ Private Sub Worksheet_Change(ByVal target As Range)
     Dim nameArr As Range, iso2Arr As Range, iso3Arr As Range
     Set ctryCell = Range("G27")
     Set iso2Cell = Range("L27")
-    Set iso3Cell = Range("O27")
+    Set iso3Cell = Range("T27")
     Set nameArr = Range("O37:O290")
     Set iso2Arr = Range("P37:P290")
     Set iso3Arr = Range("Q37:Q290")

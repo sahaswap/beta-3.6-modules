@@ -48,7 +48,9 @@ Private Const NEG1 As String = """ AND (arrest OR corruption OR sentencing OR mo
 Private Const NEG2 As String = """investigat*, indict*, charge?, court, lawsuit, judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"""
 Private Const SHEET_HOOK_MARK As String = "' (Inputs V14:AB14, V18:AB22. Search Matrix updates its links when opened.)"
 Private Const RESET_LINE As String = _
-    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:N27, O27, V14:AB14, V18:AB22"").Value = """""
+    "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:S27, T27:U27, V14:AB14, V18:AB22"").Value = """""
+' How much of RESET_LINE every earlier version of that line shares.
+Private Const RESET_PREFIX As Long = 54
 
 '------------------------------------------------------------------
 ' STEP 1 - the code
@@ -211,7 +213,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     Dim nRenPick As Long, nMergeMenu As Long, nMergeCase As Long, nMergeMsg As Long, nNavy As Long
     Dim nNavyBtn As Long, nNavyTitle As Long, hasFindButton As Boolean
     Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean, nAlertRows As Long
-    Dim nRenRow As Long, nRenCts As Long
+    Dim nRenRow As Long, nRenCts As Long, nIso3 As Long
     Dim openNote As String, out As String, smNote As String
 
     For Each comp In proj.VBComponents
@@ -236,7 +238,11 @@ Private Function PatchCode(ByVal proj As Object) As String
                     cm.ReplaceLine i, Replace(Replace(ln, """" & PICKER_OLD & """", """" & PICKER_NEW & """"), _
                         """V13""", """" & PICKER_NEW & """")
                     nPicker = nPicker + 1
-                ElseIf Left$(t, 62) = Left$(RESET_LINE, 62) And Right$(t, 11) = ".Value = """"" Then
+                ElseIf t = "Set iso3Cell = Range(""O27"")" Then
+                    ' Sheet1's country lookups: ISO Code 3 moved to T27.
+                    cm.ReplaceLine i, Replace(ln, """O27""", """T27""")
+                    nIso3 = nIso3 + 1
+                ElseIf Left$(t, RESET_PREFIX) = Left$(RESET_LINE, RESET_PREFIX) And Right$(t, 11) = ".Value = """"" Then
                     If t = RESET_LINE Then
                         nResetDone = nResetDone + 1
                     Else
@@ -408,6 +414,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nBlock, 1, "Navy & Gold Search Matrix: one band per entity")
     out = out & Item(nSheetHook, 1, "Sheet1's code: a link Excel makes of a typed email is taken off")
     out = out & Item(nAlertRows, 2, "Sheet1's code: Program Name / Escalation Scenario greying covers J:AB")
+    out = out & Item(nIso3, 1, "Sheet1's code: country lookups fill ISO Code 3 in T27")
     out = out & Item(nRenRow, 2, "Rename form: counterparties 1-5")
     out = out & Item(nRenCts, 2, "Rename form: CTS Report for counterparties")
     out = out & "   ThisWorkbook fits Sheet1 and sets Ctrl+Shift+T on opening: " & openNote & vbCrLf
@@ -475,15 +482,23 @@ Public Sub InstallUpdate_Step2()
     ' time. (Unmerging V3:AB28 as a whole makes Excel widen it to every
     ' block it touches - the Alert rows, then G4:T4 - and unmerge the
     ' whole form. That is what an earlier version of this did.)
-    stepName = "clearing the old layout (V3:AB28, U27:U28)"
-    UnmergeBlocksIn ws.Range("U3:AB28")
-    With ws.Range("V3:AB28")
+    ' Rows 25-27 are left alone: once the country table is spread out, its
+    ' Risk Score, PDF and Excel Risk Class cells (and their formulas) live
+    ' in V:AB.
+    stepName = "clearing the old layout (V3:AB24, V28:AB28)"
+    UnmergeBlocksIn ws.Range("U3:AB24,U28:AB28")
+    With ws.Range("V3:AB24,V28:AB28")
         .Validation.Delete
         .Clear
     End With
-    ws.Range("U27:U28").Validation.Delete
-    ws.Range("U27:U28").Clear
-    PlainLook ws.Range("V3:AB28,U27:U28"), ws.Range("U26")
+    If CStr(ws.Range("T26").Value) = "Excel Risk Class" Then
+        ' The old visible theme picker (U27:U28), before the country table
+        ' takes U27.
+        UnmergeBlocksIn ws.Range("U27:U28")
+        ws.Range("U27:U28").Validation.Delete
+        ws.Range("U27:U28").Clear
+    End If
+    PlainLook ws.Range("V3:AB24,V28:AB28"), ws.Range("U26")
     For Each r In Array(12, 13, 14, 18, 19, 20, 21, 22)
         On Error Resume Next
         ws.Shapes("OSDD Listed " & r).Delete
@@ -501,21 +516,38 @@ Public Sub InstallUpdate_Step2()
     For Each r In Array("G4:T4", "G5:I5", "G6:I6", "G7:I7", "G8:I8", "G9:I9", "G10:I10", _
         "G12:T12", "G13:I13", "J13:T13", "G14:I14", "J14:T14", _
         "G16:T16", "G17:I17", "J17:S17", "G18:I18", "J18:S18", "G19:I19", "J19:S19", "G20:I20", "J20:S20", _
-        "G21:I21", "J21:S21", "G22:I22", "J22:S22", "G23:I23", "J23:S23", _
-        "G26:K26", "L26:N26", "P26:Q26", "R26:S26", "G27:K27", "L27:N27", "P27:Q27", "R27:S27")
+        "G21:I21", "J21:S21", "G22:I22", "J22:S22", "G23:I23", "J23:S23")
         If ws.Range(r).Cells(1, 1).MergeArea.Address <> ws.Range(r).Address Then ws.Range(r).Merge
     Next r
     Application.DisplayAlerts = True
 
-    stepName = "widening the Alert Related Information and country risk rows to AB"
+    ' Country Risk Rating: six fields spread evenly across G:AB, three under
+    ' the form and three beside it -
+    '   Country Name G:K | ISO Code 2 L:S | ISO Code 3 T:U ||
+    '   Risk Score V:W | PDF Risk Class X:Z | Excel Risk Class AA:AB
+    ' The cells move with Excel's own Cut, so every formula that reads them
+    ' follows by itself: Sheet7's [Country Risk] tag reads PDF Risk Class
+    ' from X27 and Excel Risk Class from AA27 afterwards (ISO Code 2 stays
+    ' L27), with the same result. Done once - a re-run finds them moved.
+    stepName = "spreading the Country Risk Rating fields"
+    UnmergeBlocksIn ws.Range("G26:AB27")
+    If CStr(ws.Range("T26").Value) = "Excel Risk Class" Then
+        For Each r In Array(Array("T", "AA"), Array("R", "X"), Array("P", "V"), Array("O", "T"))
+            ws.Range(r(0) & "26:" & r(0) & "27").Cut Destination:=ws.Range(r(1) & "26")
+        Next r
+        Application.CutCopyMode = False
+    End If
+    Application.DisplayAlerts = False
+    For Each r In Array("G26:K26", "G27:K27", "L26:S26", "L27:S27", "T26:U26", "T27:U27", _
+        "V26:W26", "V27:W27", "X26:Z26", "X27:Z27", "AA26:AB26", "AA27:AB27")
+        ws.Range(r).Merge
+    Next r
+    Application.DisplayAlerts = True
+
+    stepName = "widening the Alert Related Information rows to AB"
     Application.DisplayAlerts = False
     For c = 5 To 10
         ws.Range("J" & c & ":AB" & c).Merge
-    Next c
-    ' Country Risk Rating too: Excel Risk Class (T26 / T27, still the cells
-    ' its formula and Sheet7's [Country Risk] tag use) runs across to AB.
-    For c = 26 To 27
-        ws.Range("T" & c & ":AB" & c).Merge
     Next c
     Application.DisplayAlerts = True
 
@@ -609,8 +641,8 @@ Public Sub InstallUpdate_Step2()
     ' original dotted ones covered R27:S28 and T27:T28.
     stepName = "colouring the country risk cells"
     ws.Range("R27:AB28").FormatConditions.Delete
-    RiskColours ws.Range("R27:S27")
-    RiskColours ws.Range("T27:AB27")
+    RiskColours ws.Range("X27:Z27")
+    RiskColours ws.Range("AA27:AB27")
 
     ' The theme picker, out of sight: themes are chosen with Ctrl+Shift+T.
     stepName = "hiding the theme picker (" & PICKER_NEW & ")"
