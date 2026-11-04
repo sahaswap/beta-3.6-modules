@@ -49,9 +49,21 @@ Option Explicit
 '     last day of the month of the last one. Unlike EN, each Transaction ID
 '     is listed once (the first row), as DeDupe lists them. Rows that say
 '     neither Yes nor No are left out of both.
+'   - Every dated row, whatever its flag and with no dedupe, is saved as
+'     "<ECM>_<Alert>_Lookback Transactions (mm.dd.yyyy to mm.dd.yyyy)" beside
+'     them, picked the way EN Network picks its Lookback file: from the first
+'     day of the first alerted month one year back, to the last day of the
+'     last alerted month. Its four pivots are in "<ECM>_<Alert>_Lookback
+'     Pivots (...).xlsx", built on totals as the main file's are.
 '   - Columns are read from the header row's first filled cell, not from
 '     the Transaction ID column, so a column to its left (such as that
 '     flag in the CSV exports) is kept.
+'
+' LOOKBACK ONLY makes just that Lookback file and its pivots, for a case
+' whose other files are ready. It reads the same Transaction Files folder
+' (the window comes from their Yes rows) and leaves ConsolidatedData, Sheet7,
+' the tracker and every other export file alone. Its button is added to
+' frmExportMode while this module runs - see AddLookbackChoice.
 '
 ' EN and PIVOT use Power Query: it combines the folder, does the date /
 ' amount / Counterparty cleanup and filters each output sheet, which is
@@ -73,7 +85,7 @@ Option Explicit
 ' Shown on the status bar and in the Resume prompt, so it's clear which copy
 ' of this module is running (an imported module only sticks once the tool
 ' itself is saved).
-Private Const MODULE_VERSION As String = "2026-10-29c"
+Private Const MODULE_VERSION As String = "2026-11-04a"
 
 ' Legacy's Scenario pivot lists every Alert / Dr Cr / Counterparty
 ' combination. Past this many, it leaves Counterparty out: a pivot with
@@ -191,11 +203,15 @@ Private m_p1Trans As Long, m_p1Alert As Long, m_p1Flag As Long
 Private m_rowsNonAlerted As Double, m_rowsNoFlag As Double
 ' The Non Alerted list: every dated No row, first per Transaction ID, kept
 ' in pass 1 (m_naW); pass 2 keeps those in the alerted month(s) (m_nwW, see
-' KeepNonAlertedInWindow). m_win*: the first and last alerted date seen.
+' KeepRowsInWindow). m_win*: the first and last alerted date seen.
 Private m_naW As TempWriter, m_nwW As TempWriter, m_naSeen As Variant
 Private m_naPaths As Collection, m_flagFound As Boolean
 Private m_winHave As Boolean, m_winFirst As Date, m_winLast As Date
-Private m_nwStart As Date, m_nwEnd As Date
+Private m_nwStart As Date, m_nwEnd As Date, m_nwWhat As String
+' The Lookback list: every dated row, whatever its flag, kept in pass 1
+' (m_lbW); pass 2 keeps those in the Lookback window (BuildLookbackFiles).
+' m_lookbackOnly: the Lookback Only export, which makes nothing else.
+Private m_lbW As TempWriter, m_lbPaths As Collection, m_lookbackOnly As Boolean
 Private m_hasCp As Boolean, m_dedupeCP As Boolean, m_dedupeDD As Boolean
 Private m_cpSeen As Variant, m_ddSeen As Variant, m_alertIds As Object
 Private m_cpW As TempWriter, m_ddW As TempWriter, m_alW As TempWriter
@@ -285,14 +301,18 @@ End If
 ' 1b. EXPORT FORMAT PICKER - frmExportMode
 ' ==========================================
 Dim exportMode As String
+Dim lookbackChoice As clsLookbackButton   ' kept while the form is up: it carries the button's click
+Set lookbackChoice = AddLookbackChoice()
 frmExportMode.Show vbModal
+Set lookbackChoice = Nothing
 
 If frmExportMode.userCancelled Then
     Unload frmExportMode
     Exit Sub
 End If
-exportMode = frmExportMode.SelectedMode   ' "LEGACY" / "EN" / "PIVOT"
+exportMode = frmExportMode.SelectedMode   ' "LEGACY" / "EN" / "PIVOT" / "LOOKBACK"
 Unload frmExportMode
+m_lookbackOnly = (exportMode = "LOOKBACK")
 
 Dim sourceFolderName As String
 If exportMode = "PIVOT" Then
@@ -425,6 +445,7 @@ End If
 
 ' ==========================================
 ' 4. TWO-LAYER EXPORT & DEDUPE (LEGACY) - one pass, no Power Query
+' (Lookback Only reads the files the same way - see m_lookbackOnly.)
 ' ==========================================
 If exportMode <> "EN" Then
     LegacyExport wsHome, wsRealCD, ecmID, AlertID, folderPath, saveFolderPath, origCalc
@@ -1113,7 +1134,7 @@ End Sub
 ' ==========================================================
 ' FinishRun - hands Excel back after a successful export
 ' ==========================================================
-Private Sub FinishRun(ByVal origCalc As XlCalculation)
+Private Sub FinishRun(ByVal origCalc As XlCalculation, Optional ByVal pushTracker As Boolean = True)
     Application.EnableCancelKey = xlInterrupt
     Application.Calculation = origCalc
     Application.EnableEvents = True
@@ -1124,7 +1145,7 @@ Private Sub FinishRun(ByVal origCalc As XlCalculation)
     ThisWorkbook.Sheets("ConsolidatedData").Protect Password:="p7ss"
     ThisWorkbook.Sheets("Sheet1").Protect Password:="p7ss"
     ThisWorkbook.Protect Password:="p7ss", Structure:=True, Windows:=False
-    Application.OnTime Now + TimeSerial(0, 0, 1), "PushTrxTracker_Deferred"
+    If pushTracker Then Application.OnTime Now + TimeSerial(0, 0, 1), "PushTrxTracker_Deferred"
     On Error GoTo 0
 End Sub
 
@@ -1928,6 +1949,7 @@ Private Sub LegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Worksheet,
     AppendRunInfo "ECM=" & ecmID
     AppendRunInfo "ALERT=" & AlertID
     AppendRunInfo "SOURCE=" & folderPath
+    If m_lookbackOnly Then AppendRunInfo "MODE=LOOKBACK"
 
     m_readSecs = Timer
     m_haveMaster = False
@@ -1972,13 +1994,16 @@ Private Sub LegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Worksheet,
     TempClose m_ddW
     TempClose m_alW
     TempClose m_naW
+    TempClose m_lbW
     m_flagFound = (m_p1Flag > 0)
     Set m_naPaths = m_naW.Paths
+    Set m_lbPaths = m_lbW.Paths
     AppendRunInfo "CPROWS=" & Format$(m_cpW.Total, "#,##0")
     AppendRunInfo "DDROWS=" & Format$(m_ddW.Total, "#,##0")
     ' What pass 2 needs for the Non Alerted file, for the Resume macro.
     AppendRunInfo "FLAGCOL=" & IIf(m_flagFound, "1", "0")
     AppendRunInfo "NAROWS=" & Format$(m_naW.Total, "#,##0")
+    AppendRunInfo "LBROWS=" & Format$(m_lbW.Total, "#,##0")
     If m_winHave Then
         AppendRunInfo "WINFIRST=" & Format$(m_winFirst, "yyyymmdd")
         AppendRunInfo "WINLAST=" & Format$(m_winLast, "yyyymmdd")
@@ -1996,11 +2021,18 @@ Private Sub LegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Worksheet,
     If m_readSecs < 0 Then m_readSecs = m_readSecs + 86400
 
     summary = Format$(m_rowsRead, "#,##0") & " rows read from " & filesRead & " file(s)."
-    If m_p1Flag > 0 Then
+    If m_lookbackOnly Then
+        If m_p1Flag > 0 Then
+            summary = summary & " The Lookback window comes from the rows whose 'Is Alerted Transaction?' says Yes."
+        Else
+            summary = summary & " The files have no 'Is Alerted Transaction?' column, so the Lookback window " & _
+                "comes from every row's date."
+        End If
+    ElseIf m_p1Flag > 0 Then
         summary = summary & " 'Is Alerted Transaction?': the Yes rows make CP Selection and DeDupe, and the " & _
             Format$(m_rowsNonAlerted, "#,##0") & " No row(s) the Non Alerted list"
         If m_rowsNoFlag > 0 Then
-            summary = summary & "; " & Format$(m_rowsNoFlag, "#,##0") & " row(s) saying neither were left out"
+            summary = summary & "; " & Format$(m_rowsNoFlag, "#,##0") & " row(s) saying neither are only in the Lookback file"
         End If
         summary = summary & "."
     Else
@@ -2015,6 +2047,10 @@ Private Sub LegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Worksheet,
             "first file's header and were left out."
     End If
 
+    If m_lookbackOnly Then
+        FinishLookbackOnly ecmID, AlertID, saveFolderPath, origCalc, summary
+        Exit Sub
+    End If
     FinishLegacyExport wsHome, wsRealCD, ecmID, AlertID, saveFolderPath, origCalc, _
         m_cpW.Paths, m_ddW.Paths, m_alW.Paths, summary
 End Sub
@@ -2068,6 +2104,7 @@ Private Sub SetMasterColumns(ByRef fileHdr() As String)
     TempOpen m_ddW, "DeDupe"
     TempOpen m_alW, "Alerted Rows"
     TempOpen m_naW, "Non Alerted"
+    TempOpen m_lbW, "Lookback"
     m_haveMaster = True
 End Sub
 
@@ -2076,7 +2113,7 @@ End Sub
 ' column); colMap says which file column each export column comes from.
 Private Sub ProcessBlock(ByRef blk As Variant, ByVal nBlk As Long, ByRef colMap() As Long)
     Dim r As Long, j As Long, c As Long, v As Variant, isBlank As Boolean, isDrRow As Boolean
-    Dim k As String, rowText As String, isNonAlerted As Boolean, flagText As String
+    Dim k As String, rowText As String, isNonAlerted As Boolean, isNeither As Boolean, flagText As String
 
     For r = 1 To nBlk
         ' Row in the export's column order; wholly empty rows skipped.
@@ -2092,8 +2129,10 @@ Private Sub ProcessBlock(ByRef blk As Variant, ByVal nBlk As Long, ByRef colMap(
 
         ' With an "Is Alerted Transaction?" column: Yes rows go on to CP
         ' Selection, DeDupe, the pivots, ConsolidatedData and Sheet7; No rows
-        ' to the Non Alerted list only; rows saying neither nowhere.
+        ' to the Non Alerted list and rows saying neither nowhere - but all
+        ' three go on the Lookback list, as in EN.
         isNonAlerted = False
+        isNeither = False
         If m_p1Flag > 0 Then
             v = m_rowVals(m_p1Flag)
             flagText = ""
@@ -2102,7 +2141,7 @@ Private Sub ProcessBlock(ByRef blk As Variant, ByVal nBlk As Long, ByRef colMap(
                 isNonAlerted = True
             ElseIf flagText <> "YES" Then
                 m_rowsNoFlag = m_rowsNoFlag + 1
-                GoTo NextRow
+                isNeither = True
             End If
         End If
 
@@ -2119,18 +2158,28 @@ Private Sub ProcessBlock(ByRef blk As Variant, ByVal nBlk As Long, ByRef colMap(
             m_rowVals(m_outCols) = v
         End If
 
+        rowText = RowLine(m_rowVals)
+
+        ' ---- Lookback: every dated row, whatever its flag and however often
+        ' its Transaction ID comes up, as EN takes them. The window is only
+        ' known once every file is read, so pass 2 picks the rows inside it.
+        If m_p1Date > 0 Then
+            If Not IsBlankValue(m_rowVals(m_p1Date)) Then TempAdd m_lbW, rowText
+        End If
+        If isNeither Then GoTo NextRow
+
         ' ---- Non Alerted: dated rows, first per Transaction ID. The alerted
         ' month(s) are only known once every file is read, so pass 2 picks
-        ' the ones inside them (KeepNonAlertedInWindow).
+        ' the ones inside them (KeepRowsInWindow).
         If isNonAlerted Then
             m_rowsNonAlerted = m_rowsNonAlerted + 1
+            If m_lookbackOnly Then GoTo NextRow
             If m_p1Date > 0 Then
                 If IsBlankValue(m_rowVals(m_p1Date)) Then GoTo NextRow
             End If
             If m_p1Trans > 0 Then
                 If AlreadySeen(m_naSeen, KeyText(m_rowVals(m_p1Trans))) Then GoTo NextRow
             End If
-            rowText = RowLine(m_rowVals)
             TempAdd m_naW, rowText
             GoTo NextRow
         End If
@@ -2140,6 +2189,7 @@ Private Sub ProcessBlock(ByRef blk As Variant, ByVal nBlk As Long, ByRef colMap(
             v = m_rowVals(m_p1Date)
             If VarType(v) = vbDate Then NoteAlertedDate CDate(v)
         End If
+        If m_lookbackOnly Then GoTo NextRow
 
         ' ---- CP Selection: first row per Transaction ID + Alert Information.
         ' The alert text is swapped for a short number first, so the lakhs of
@@ -2149,7 +2199,6 @@ Private Sub ProcessBlock(ByRef blk As Variant, ByVal nBlk As Long, ByRef colMap(
             If Not m_alertIds.Exists(k) Then m_alertIds.Add k, m_alertIds.count + 1
             If AlreadySeen(m_cpSeen, m_alertIds(k) & vbTab & KeyText(m_rowVals(m_p1Trans))) Then GoTo NextRow
         End If
-        rowText = RowLine(m_rowVals)
         TempAdd m_cpW, rowText
 
         ' ---- DeDupe: first row per Transaction ID, then rows with a date
@@ -2170,8 +2219,13 @@ NextRow:
 End Sub
 
 Private Sub ShowReadProgress(ByVal fileNo As Long, ByVal fileCount As Long)
-    SetStage "file " & fileNo & " of " & fileCount & ": " & Format$(m_rowsRead, "#,##0") & _
-        " rows read, " & Format$(m_ddW.Total + m_ddW.Fill, "#,##0") & " unique transactions"
+    If m_lookbackOnly Then
+        SetStage "file " & fileNo & " of " & fileCount & ": " & Format$(m_rowsRead, "#,##0") & _
+            " rows read, " & Format$(m_lbW.Total + m_lbW.Fill, "#,##0") & " dated rows"
+    Else
+        SetStage "file " & fileNo & " of " & fileCount & ": " & Format$(m_rowsRead, "#,##0") & _
+            " rows read, " & Format$(m_ddW.Total + m_ddW.Fill, "#,##0") & " unique transactions"
+    End If
     DoEvents
 End Sub
 
@@ -2422,7 +2476,7 @@ End Sub
 ' ==========================================================
 Private Sub ProcessCsvFields(ByRef fields() As String, ByVal cleanNeeded As Boolean)
     Dim j As Long, idx As Long, ub As Long, isBlank As Boolean, rowText As String, k As String
-    Dim isNonAlerted As Boolean, flagText As String, dv As Variant
+    Dim isNonAlerted As Boolean, isNeither As Boolean, flagText As String, dv As Variant
 
     ub = UBound(fields)
     isBlank = True
@@ -2445,7 +2499,7 @@ Private Sub ProcessCsvFields(ByRef fields() As String, ByVal cleanNeeded As Bool
             isNonAlerted = True
         ElseIf flagText <> "YES" Then
             m_rowsNoFlag = m_rowsNoFlag + 1
-            Exit Sub
+            isNeither = True
         End If
     End If
 
@@ -2476,16 +2530,24 @@ Private Sub ProcessCsvFields(ByRef fields() As String, ByVal cleanNeeded As Bool
         End If
     Next j
 
+    rowText = Join(m_csvOut, vbTab)
+
+    ' ---- Lookback (see ProcessBlock)
+    If m_p1Date > 0 Then
+        If Len(m_csvOut(m_p1Date)) > 0 Then TempAdd m_lbW, rowText
+    End If
+    If isNeither Then Exit Sub
+
     ' ---- Non Alerted (see ProcessBlock)
     If isNonAlerted Then
         m_rowsNonAlerted = m_rowsNonAlerted + 1
+        If m_lookbackOnly Then Exit Sub
         If m_p1Date > 0 Then
             If Len(m_csvOut(m_p1Date)) = 0 Then Exit Sub
         End If
         If m_p1Trans > 0 Then
             If AlreadySeen(m_naSeen, UCase$(m_csvOut(m_p1Trans))) Then Exit Sub
         End If
-        rowText = Join(m_csvOut, vbTab)
         TempAdd m_naW, rowText
         Exit Sub
     End If
@@ -2495,6 +2557,7 @@ Private Sub ProcessCsvFields(ByRef fields() As String, ByVal cleanNeeded As Bool
         dv = DateValueOf(m_csvOut(m_p1Date))
         If VarType(dv) = vbDate Then NoteAlertedDate CDate(dv)
     End If
+    If m_lookbackOnly Then Exit Sub
 
     ' ---- CP Selection: first row per Transaction ID + Alert Information
     If m_dedupeCP Then
@@ -2502,7 +2565,6 @@ Private Sub ProcessCsvFields(ByRef fields() As String, ByVal cleanNeeded As Bool
         If Not m_alertIds.Exists(k) Then m_alertIds.Add k, m_alertIds.count + 1
         If AlreadySeen(m_cpSeen, m_alertIds(k) & vbTab & UCase$(m_csvOut(m_p1Trans))) Then Exit Sub
     End If
-    rowText = Join(m_csvOut, vbTab)
     TempAdd m_cpW, rowText
 
     ' ---- DeDupe: first row per Transaction ID, then rows with a date
@@ -2760,6 +2822,11 @@ Public Sub Consolidated_AML_Workflow_Large_Resume()
     ' before that list didn't keep it: FLAGCOL is missing).
     Set m_naPaths = TempPartPaths(folder, "Non Alerted")
     m_flagFound = (RunInfoValue(folder, "FLAGCOL") = "1")
+    ' The Lookback list (an export started by a version before that list has
+    ' none: BuildLookbackFiles says so), and whether that is all this run makes.
+    Set m_lbPaths = TempPartPaths(folder, "Lookback")
+    m_lookbackOnly = False
+    If hasInfo Then m_lookbackOnly = (RunInfoValue(folder, "MODE") = "LOOKBACK")
     m_winHave = False
     If Len(RunInfoValue(folder, "WINFIRST")) = 8 And Len(RunInfoValue(folder, "WINLAST")) = 8 Then
         m_winFirst = YmdDate(RunInfoValue(folder, "WINFIRST"))
@@ -2770,7 +2837,13 @@ Public Sub Consolidated_AML_Workflow_Large_Resume()
     stamp = Mid$(folder, InStrRev(folder, "LargeExport_") + Len("LargeExport_"))
     stoppedAt = Mid$(stamp, 7, 2) & "/" & Mid$(stamp, 5, 2) & "/" & Left$(stamp, 4) & " " & _
         Mid$(stamp, 10, 2) & ":" & Mid$(stamp, 12, 2)
-    If hasInfo Then
+    If m_lookbackOnly Then
+        prompt = "Continue the Lookback Only export for ECM ID " & ecmID & " started " & stoppedAt & "?" & vbCrLf & _
+            vbCrLf & "It read:" & vbCrLf & RunInfoList(folder, "FILE") & vbCrLf & vbCrLf & _
+            "Dated rows kept: " & RunInfoValue(folder, "LBROWS") & "."
+        answer = MsgBox("Large export module " & MODULE_VERSION & vbCrLf & vbCrLf & prompt, _
+            vbQuestion + vbYesNo, "Resume Large Export")
+    ElseIf hasInfo Then
         prompt = "Continue the large export for ECM ID " & ecmID & " started " & stoppedAt & "?" & vbCrLf & _
             vbCrLf & "It read:" & vbCrLf & RunInfoList(folder, "FILE") & vbCrLf & vbCrLf & _
             "CP Selection: " & RunInfoValue(folder, "CPROWS") & " rows, DeDupe: " & _
@@ -2790,6 +2863,11 @@ Public Sub Consolidated_AML_Workflow_Large_Resume()
             vbExclamation + vbYesNo + vbDefaultButton2, "Resume Large Export - Check the Case")
     End If
     If answer <> vbYes Then Exit Sub
+    If m_lookbackOnly And m_lbPaths.count = 0 Then
+        MsgBox "That Lookback Only export kept no dated rows, so there is nothing to continue.", _
+            vbExclamation, "Nothing to Resume"
+        Exit Sub
+    End If
 
     ThisWorkbook.Unprotect Password:="p7ss"
     On Error Resume Next
@@ -2804,9 +2882,14 @@ Public Sub Consolidated_AML_Workflow_Large_Resume()
 
     m_tempFolder = folder
     m_readSecs = -1
-    ReadTempHeader CStr(cpPaths(1))
-    ScanTextColumns CStr(cpPaths(1)), 5000
-    ScanTextColumns CStr(ddPaths(1)), 5000
+    If m_lookbackOnly Then
+        ReadTempHeader CStr(m_lbPaths(1))
+    Else
+        ReadTempHeader CStr(cpPaths(1))
+        ScanTextColumns CStr(cpPaths(1)), 5000
+        ScanTextColumns CStr(ddPaths(1)), 5000
+    End If
+    If m_lbPaths.count > 0 Then ScanTextColumns CStr(m_lbPaths(1)), 5000
 
     Application.Calculation = xlCalculationManual
     Application.EnableEvents = False
@@ -2817,6 +2900,10 @@ Public Sub Consolidated_AML_Workflow_Large_Resume()
     If hasInfo And Len(RunInfoValue(folder, "FLAGCOL")) = 0 Then
         prompt = prompt & " That export was started by a version that didn't keep the non-alerted " & _
             "rows, so there is no Non Alerted file - run the export again for one."
+    End If
+    If m_lookbackOnly Then
+        FinishLookbackOnly ecmID, AlertID, saveFolderPath, origCalc, prompt
+        Exit Sub
     End If
     FinishLegacyExport wsHome, wsRealCD, ecmID, AlertID, saveFolderPath, origCalc, _
         cpPaths, ddPaths, alPaths, prompt
@@ -2868,8 +2955,8 @@ Private Sub FinishLegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Work
     Dim dateName As String, amtName As String, cdFilled As Boolean, bigCase As Boolean
     Dim cpStaged As Collection, ddStaged As Collection, cpRows As Long, ddRows As Long, alertRows As Long
     Dim cpFilesText As String, ddFilesText As String, unmatched As String, doneMsg As String
-    Dim st(1 To 11) As Variant, newWb As Workbook, ws As Worksheet, wsScn As Worksheet, wsDay As Worksheet
-    Dim wsPivot As Worksheet, outArr() As Variant, g As Long, shIdx As Long
+    Dim st(1 To 11) As Variant, newWb As Workbook
+    Dim lbStaged As Collection, lbLine As String, tLb As Double, tLbStart As Double, mainScnN As Long
     Dim excelFileName As String, finalSavePath As String
     Dim t0 As Double, tTot As Double, tCp As Double, tDd As Double, tRest As Double, timing As String
     Dim cpLeftOut As Boolean
@@ -2882,12 +2969,7 @@ Private Sub FinishLegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Work
     prefix = saveFolderPath & slash & ecmID & "_" & AlertID & "_"
     stagePrefix = m_tempFolder & slash & ecmID & "_" & AlertID & "_"
 
-    If m_dateCol > 0 Then dateName = m_headerNames(m_dateCol)
-    m_iAmt = FindHeaderIndex(m_headerNames, "Transaction Amount", False)
-    m_iDr = FindHeaderIndex(m_headerNames, "Dr Cr", False)
-    m_iAlert = FindHeaderIndex(m_headerNames, "Alert Information", False)
-    m_iAcct = FindHeaderIndex(m_headerNames, "Account No", False)
-    If m_iAmt > 0 Then amtName = m_headerNames(m_iAmt)
+    ReadTotalColumns dateName, amtName
     ResetTotals
 
     ' ---- the totals, from the temporary files (every part, saved or not)
@@ -2924,7 +3006,8 @@ Private Sub FinishLegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Work
         If m_winHave Then
             winStart = DateSerial(Year(m_winFirst), Month(m_winFirst), 1)
             winEnd = DateSerial(Year(m_winLast), Month(m_winLast) + 1, 0)
-            Set nwPaths = KeepNonAlertedInWindow(m_naPaths, winStart, winEnd, naRows)
+            Set nwPaths = KeepRowsInWindow(m_naPaths, winStart, winEnd, "Non Alerted Window", _
+                "picking the non-alerted transactions in the alerted month(s)", naRows)
             If naRows > 0 Then
                 naFilesText = SaveTempPartsAsXlsx(nwPaths, "Non Alerted Transaction", _
                     stagePrefix & "Non Alerted Transaction", dateName, "m/d/yyyy", amtName, Nothing, naCopied, naStaged)
@@ -2981,66 +3064,23 @@ Private Sub FinishLegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Work
     On Error GoTo 0
 
     ' ---- main file: totals + pivots
-    SetStage "writing the pivot totals (" & Format$(m_scnN, "#,##0") & " alert / Dr Cr / counterparty rows)"
-    If m_scnN + 1 > wsRealCD.Rows.count Then
-        Err.Raise vbObjectError + 1006, "modLargeExport", "There are too many alert / Dr Cr / counterparty " & _
-            "combinations (" & Format$(m_scnN, "#,##0") & ") for the Scenario Totals sheet."
-    End If
-    Set newWb = NewOutputWorkbook()
-    Set wsScn = newWb.Sheets(1)
-    wsScn.Name = "Scenario Totals"
-    wsScn.Columns(3).NumberFormat = "@"     ' Counterparty as text, as its formula gave it
-    ReDim outArr(1 To m_scnN + 1, 1 To 5)
-    outArr(1, 1) = "Alert Information": outArr(1, 2) = "Dr Cr": outArr(1, 3) = "Counterparty"
-    outArr(1, 4) = "Transaction Amount": outArr(1, 5) = "Transaction Count"
-    For g = 1 To m_scnN
-        outArr(g + 1, 1) = m_scnAlert(g): outArr(g + 1, 2) = m_scnDr(g): outArr(g + 1, 3) = m_scnCp(g)
-        outArr(g + 1, 4) = m_scnSum(g): outArr(g + 1, 5) = m_scnCnt(g)
-    Next g
-    wsScn.Range("A1").Resize(m_scnN + 1, 5).Value = outArr
-    ' Too many for the pivot (see SCENARIO_PIVOT_MAX_ROWS): the sheet itself
-    ' is the breakdown, so it is put in order - alert, Dr Cr, largest first.
-    If m_scnN > SCENARIO_PIVOT_MAX_ROWS Then
-        wsScn.Range("A1").Resize(m_scnN + 1, 5).Sort _
-            Key1:=wsScn.Range("A1"), Order1:=xlAscending, _
-            Key2:=wsScn.Range("B1"), Order2:=xlAscending, _
-            Key3:=wsScn.Range("D1"), Order3:=xlDescending, Header:=xlYes
-    End If
+    Set newWb = BuildTotalsPivotFile("Legacy", cpLeftOut)
 
-    Set wsDay = newWb.Sheets.Add(After:=wsScn)
-    wsDay.Name = "Daily Totals"
-    ReDim outArr(1 To m_dayN + 1, 1 To 4)
-    outArr(1, 1) = "Transaction Date": outArr(1, 2) = "Dr Cr"
-    outArr(1, 3) = "Transaction Amount": outArr(1, 4) = "Transaction Count"
-    For g = 1 To m_dayN
-        outArr(g + 1, 1) = m_dayDate(g): outArr(g + 1, 2) = m_dayDr(g)
-        outArr(g + 1, 3) = m_daySum(g): outArr(g + 1, 4) = m_dayCnt(g)
-    Next g
-    wsDay.Range("A1").Resize(m_dayN + 1, 4).Value = outArr
-
-    ' Backwards, because the new workbook's other blank sheets go as it runs.
-    For shIdx = newWb.Worksheets.count To 1 Step -1
-        Set ws = newWb.Worksheets(shIdx)
-        If ws.Name = "Scenario Totals" Or ws.Name = "Daily Totals" Then
-            StyleHeaderRow ws
-            FormatDataColumns ws, "Transaction Date", "m/d/yyyy", "Transaction Amount"
-            TidyDataSheet ws
-        Else
-            SafeDeleteSheet newWb, ws.Name
-        End If
-    Next shIdx
-
-    SetStage "building the Legacy pivots"
-    Set wsPivot = newWb.Sheets.Add(Before:=newWb.Sheets(1))
-    wsPivot.Name = "Pivot"
-    BuildTotalsPivots newWb, wsPivot, wsScn, wsDay, cpLeftOut
-    DropTotalsSheets newWb, wsPivot, cpLeftOut
+    ' ---- Lookback Transactions and its pivots. Its totals replace the main
+    ' file's, so this comes after those are in newWb and Sheet7's are stored.
+    mainScnN = m_scnN
+    tLbStart = Timer
+    Set lbStaged = New Collection
+    lbLine = BuildLookbackFiles(stagePrefix, dateName, amtName, lbStaged)
+    tLb = Timer - tLbStart
+    If tLb < 0 Then tLb = tLb + 86400
 
     ' ---- everything is built: into the case folder together
     SetStage "moving the files into the case folder"
     MoveStagedFiles cpStaged, prefix & "CP Selection"
     MoveStagedFiles ddStaged, prefix & "DeDupe"
     If m_flagFound Then MoveStagedFiles naStaged, prefix & "Non Alerted Transaction"
+    MoveLookbackFiles lbStaged, prefix
     m_keepTemp = False
     RemoveTempFolder
 
@@ -3062,26 +3102,26 @@ Private Sub FinishLegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Work
     newWb.Sheets("Pivot").Activate
     FinishRun origCalc
 
-    tRest = Timer - t0
+    tRest = Timer - t0 - tLb
     If m_readSecs >= 0 Then timing = "reading " & DurationText(m_readSecs) & ", "
     timing = "Time taken: " & timing & "totals " & DurationText(tTot) & ", CP Selection " & _
-        DurationText(tCp) & ", DeDupe " & DurationText(tDd) & ", pivots and the rest " & _
-        DurationText(tRest) & "."
+        DurationText(tCp) & ", DeDupe " & DurationText(tDd) & ", Lookback " & DurationText(tLb) & _
+        ", pivots and the rest " & DurationText(tRest) & "."
     If m_readSecs >= 0 Then
         timing = timing & " Total " & DurationText(m_readSecs + IIf(tTot < 0, tTot + 86400, tTot) + _
             IIf(tCp < 0, tCp + 86400, tCp) + IIf(tDd < 0, tDd + 86400, tDd) + _
-            IIf(tRest < 0, tRest + 86400, tRest)) & "."
+            tLb + IIf(tRest < 0, tRest + 86400, tRest)) & "."
     End If
 
     doneMsg = "Workflow Complete!" & vbCrLf & vbCrLf & _
         "Pivots:" & vbCrLf & "   " & excelFileName & vbCrLf & _
         "CP Selection - " & Format$(cpRows, "#,##0") & " rows:" & vbCrLf & "   " & cpFilesText & vbCrLf & _
-        "DeDupe - " & Format$(ddRows, "#,##0") & " rows:" & vbCrLf & "   " & ddFilesText & vbCrLf & naLine & vbCrLf & _
+        "DeDupe - " & Format$(ddRows, "#,##0") & " rows:" & vbCrLf & "   " & ddFilesText & vbCrLf & naLine & lbLine & vbCrLf & _
         "All in: " & saveFolderPath & vbCrLf & _
         "(built first, then moved in together, so OneDrive syncs them once they're all there)" & _
         vbCrLf & vbCrLf & summary & vbCrLf & vbCrLf & timing
     If cpLeftOut Then
-        doneMsg = doneMsg & vbCrLf & vbCrLf & "There are " & Format$(m_scnN, "#,##0") & _
+        doneMsg = doneMsg & vbCrLf & vbCrLf & "There are " & Format$(mainScnN, "#,##0") & _
             " alert / Dr Cr / counterparty combinations - too many for a pivot - so the Scenario pivot " & _
             "shows Alert Information and Dr Cr only. The full counterparty breakdown, largest first, " & _
             "is on the Scenario Totals sheet, which is kept in the pivot file for that reason."
@@ -3181,6 +3221,269 @@ Private Function DeleteLeftoverTempFolders(ByVal ecmID As String, ByRef freedByt
 End Function
 
 ' ==========================================================
+' Lookback Transactions
+' ==========================================================
+' frmExportMode is shared with Module9, which has no such export, so the
+' Lookback Only button is added here, each time this module shows the form,
+' and goes when the form is unloaded. The object returned carries the click
+' and has to be kept until the form closes. If the form isn't laid out as
+' Module19 builds it, the picker just shows without the button.
+Private Function AddLookbackChoice() As clsLookbackButton
+    Dim btn As MSForms.CommandButton, lbl As MSForms.Label
+    Dim pivotBtn As Object, pivotLbl As Object, cancelBtn As Object, rowGap As Single
+    Dim handler As clsLookbackButton
+
+    On Error GoTo NoChoice
+    Load frmExportMode
+    Set pivotBtn = frmExportMode.Controls("btnPivot")
+    Set pivotLbl = frmExportMode.Controls("lblPivot")
+    Set cancelBtn = frmExportMode.Controls("btnCancel")
+    rowGap = cancelBtn.Top - pivotBtn.Top
+
+    ' The new row takes Cancel's place; Cancel and the form's foot move down.
+    Set btn = frmExportMode.Controls.Add("Forms.CommandButton.1", "btnLookback")
+    btn.Caption = "Lookback Only"
+    btn.Left = pivotBtn.Left: btn.Top = cancelBtn.Top
+    btn.Width = pivotBtn.Width: btn.Height = pivotBtn.Height
+    cancelBtn.Top = cancelBtn.Top + rowGap
+    frmExportMode.Height = frmExportMode.Height + rowGap
+
+    Set lbl = frmExportMode.Controls.Add("Forms.Label.1", "lblLookback")
+    lbl.Left = pivotLbl.Left: lbl.Width = pivotLbl.Width
+    lbl.WordWrap = True
+    lbl.Caption = "Only the Lookback Transactions file and its pivots, from the Transaction Files folder. Nothing else is changed."
+    lbl.TextAlign = pivotLbl.TextAlign
+    CentreLabelOn lbl, btn
+
+    Set handler = New clsLookbackButton
+    handler.Attach btn
+    Set AddLookbackChoice = handler
+
+    ' Legacy now makes the Lookback file too.
+    On Error Resume Next
+    frmExportMode.Controls("lblLegacy").Caption = "Dedupe + pivots + Non Alerted + Lookback - the full transaction export."
+    CentreLabelOn frmExportMode.Controls("lblLegacy"), frmExportMode.Controls("btnLegacy")
+    Exit Function
+NoChoice:
+    Set AddLookbackChoice = Nothing
+End Function
+
+' Centres a label on its button by the height its wrapped text really takes
+' (Module19's CenterLbl, at run time).
+Private Sub CentreLabelOn(ByVal lbl As Object, ByVal btn As Object)
+    lbl.AutoSize = True
+    lbl.AutoSize = False
+    lbl.Top = btn.Top + (btn.Height - lbl.Height) / 2
+End Sub
+
+' Pass 2's column numbers for the totals, from the header; dateName and
+' amtName get those columns' names.
+Private Sub ReadTotalColumns(ByRef dateName As String, ByRef amtName As String)
+    If m_dateCol > 0 Then dateName = m_headerNames(m_dateCol)
+    m_iAmt = FindHeaderIndex(m_headerNames, "Transaction Amount", False)
+    m_iDr = FindHeaderIndex(m_headerNames, "Dr Cr", False)
+    m_iAlert = FindHeaderIndex(m_headerNames, "Alert Information", False)
+    m_iAcct = FindHeaderIndex(m_headerNames, "Account No", False)
+    If m_iAmt > 0 Then amtName = m_headerNames(m_iAmt)
+End Sub
+
+' A new workbook holding only the four pivots, built from the totals added
+' up so far (m_scn*, m_day*). what names them on the status bar.
+Private Function BuildTotalsPivotFile(ByVal what As String, ByRef cpLeftOut As Boolean) As Workbook
+    Dim newWb As Workbook, ws As Worksheet, wsScn As Worksheet, wsDay As Worksheet
+    Dim wsPivot As Worksheet, outArr() As Variant, g As Long, shIdx As Long
+
+    SetStage "writing the " & what & " pivot totals (" & Format$(m_scnN, "#,##0") & " alert / Dr Cr / counterparty rows)"
+    Set newWb = NewOutputWorkbook()
+    Set wsScn = newWb.Sheets(1)
+    If m_scnN + 1 > wsScn.Rows.count Then
+        Err.Raise vbObjectError + 1006, "modLargeExport", "There are too many alert / Dr Cr / counterparty " & _
+            "combinations (" & Format$(m_scnN, "#,##0") & ") for the Scenario Totals sheet."
+    End If
+    wsScn.Name = "Scenario Totals"
+    wsScn.Columns(3).NumberFormat = "@"     ' Counterparty as text, as its formula gave it
+    ReDim outArr(1 To m_scnN + 1, 1 To 5)
+    outArr(1, 1) = "Alert Information": outArr(1, 2) = "Dr Cr": outArr(1, 3) = "Counterparty"
+    outArr(1, 4) = "Transaction Amount": outArr(1, 5) = "Transaction Count"
+    For g = 1 To m_scnN
+        outArr(g + 1, 1) = m_scnAlert(g): outArr(g + 1, 2) = m_scnDr(g): outArr(g + 1, 3) = m_scnCp(g)
+        outArr(g + 1, 4) = m_scnSum(g): outArr(g + 1, 5) = m_scnCnt(g)
+    Next g
+    wsScn.Range("A1").Resize(m_scnN + 1, 5).Value = outArr
+    ' Too many for the pivot (see SCENARIO_PIVOT_MAX_ROWS): the sheet itself
+    ' is the breakdown, so it is put in order - alert, Dr Cr, largest first.
+    If m_scnN > SCENARIO_PIVOT_MAX_ROWS Then
+        wsScn.Range("A1").Resize(m_scnN + 1, 5).Sort _
+            Key1:=wsScn.Range("A1"), Order1:=xlAscending, _
+            Key2:=wsScn.Range("B1"), Order2:=xlAscending, _
+            Key3:=wsScn.Range("D1"), Order3:=xlDescending, Header:=xlYes
+    End If
+
+    Set wsDay = newWb.Sheets.Add(After:=wsScn)
+    wsDay.Name = "Daily Totals"
+    ReDim outArr(1 To m_dayN + 1, 1 To 4)
+    outArr(1, 1) = "Transaction Date": outArr(1, 2) = "Dr Cr"
+    outArr(1, 3) = "Transaction Amount": outArr(1, 4) = "Transaction Count"
+    For g = 1 To m_dayN
+        outArr(g + 1, 1) = m_dayDate(g): outArr(g + 1, 2) = m_dayDr(g)
+        outArr(g + 1, 3) = m_daySum(g): outArr(g + 1, 4) = m_dayCnt(g)
+    Next g
+    wsDay.Range("A1").Resize(m_dayN + 1, 4).Value = outArr
+
+    ' Backwards, because the new workbook's other blank sheets go as it runs.
+    For shIdx = newWb.Worksheets.count To 1 Step -1
+        Set ws = newWb.Worksheets(shIdx)
+        If ws.Name = "Scenario Totals" Or ws.Name = "Daily Totals" Then
+            StyleHeaderRow ws
+            FormatDataColumns ws, "Transaction Date", "m/d/yyyy", "Transaction Amount"
+            TidyDataSheet ws
+        Else
+            SafeDeleteSheet newWb, ws.Name
+        End If
+    Next shIdx
+
+    SetStage "building the " & what & " pivots"
+    Set wsPivot = newWb.Sheets.Add(Before:=newWb.Sheets(1))
+    wsPivot.Name = "Pivot"
+    BuildTotalsPivots newWb, wsPivot, wsScn, wsDay, cpLeftOut
+    DropTotalsSheets newWb, wsPivot, cpLeftOut
+    Set BuildTotalsPivotFile = newWb
+End Function
+
+' Builds the Lookback file(s) and its pivot file in the scratch folder and
+' adds them to staged; returns the completion message's lines. The window
+' is EN Network's: the first day of the first alerted month one year back,
+' to the last day of the last alerted month. Every row dated in it counts,
+' whatever its flag, with no dedupe, as in EN. This overwrites the totals
+' (ResetTotals), so anything that needs them has to have used them by now.
+Private Function BuildLookbackFiles(ByVal stagePrefix As String, ByVal dateName As String, _
+    ByVal amtName As String, ByVal staged As Collection) As String
+    Dim lbStart As Date, lbEnd As Date, rangeText As String, winPaths As Collection, rows As Long
+    Dim filesText As String, copied As Boolean, item As Variant, scanned As Long
+    Dim wb As Workbook, pivotPath As String, cpLeftOut As Boolean
+
+    If Not m_winHave Then
+        BuildLookbackFiles = "Lookback Transactions - not made: no dated alerted transactions were " & _
+            "found, so the Lookback window could not be determined." & vbCrLf
+        Exit Function
+    End If
+    If m_lbPaths.count = 0 Then
+        BuildLookbackFiles = "Lookback Transactions - not made: this export was started by a version " & _
+            "that didn't keep those rows. Run the Lookback Only export for them." & vbCrLf
+        Exit Function
+    End If
+
+    lbStart = DateSerial(Year(m_winFirst) - 1, Month(m_winFirst), 1)
+    lbEnd = DateSerial(Year(m_winLast), Month(m_winLast) + 1, 0)
+    rangeText = "(" & Format$(lbStart, "mm.dd.yyyy") & " to " & Format$(lbEnd, "mm.dd.yyyy") & ")"
+
+    Set winPaths = KeepRowsInWindow(m_lbPaths, lbStart, lbEnd, "Lookback Window", _
+        "picking the Lookback transactions", rows)
+    If rows = 0 Then
+        BuildLookbackFiles = "Lookback Transactions - no rows dated " & Format$(lbStart, "mm/dd/yyyy") & _
+            " to " & Format$(lbEnd, "mm/dd/yyyy") & "." & vbCrLf
+        Exit Function
+    End If
+    filesText = SaveTempPartsAsXlsx(winPaths, "Lookback Transactions", _
+        stagePrefix & "Lookback Transactions " & rangeText, dateName, "dddd, mmmm d, yyyy", amtName, _
+        Nothing, copied, staged)
+    ' One line however many parts: a message box only shows about 1,000 characters.
+    If winPaths.count > 1 Then
+        filesText = "Lookback Transactions " & rangeText & " (part 1) to (part " & winPaths.count & ")" & LIST_FILE_EXT
+    End If
+
+    SetStage "adding up the Lookback pivot totals"
+    ResetTotals
+    For Each item In winPaths
+        ScanTempFileTotals CStr(item), 4, scanned
+    Next item
+    Set wb = BuildTotalsPivotFile("Lookback", cpLeftOut)
+
+    SetStage "saving the Lookback pivots"
+    pivotPath = stagePrefix & "Lookback Pivots " & rangeText & ".xlsx"
+    CloseIfAlreadyOpen pivotPath
+    ZoomAllSheets wb
+    wb.Sheets("Pivot").Activate
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=pivotPath, FileFormat:=51
+    MarkSaved wb
+    wb.Close SaveChanges:=False
+    staged.Add pivotPath
+
+    BuildLookbackFiles = "Lookback Transactions - " & Format$(rows, "#,##0") & " rows, " & _
+        Format$(lbStart, "mm/dd/yyyy") & " to " & Format$(lbEnd, "mm/dd/yyyy") & ":" & vbCrLf & _
+        "   " & filesText & vbCrLf & "   " & FileNameOf(pivotPath) & vbCrLf
+    If cpLeftOut Then
+        BuildLookbackFiles = BuildLookbackFiles & "   (too many combinations for its Scenario pivot: the " & _
+            "counterparty breakdown is on its Scenario Totals sheet)" & vbCrLf
+    End If
+End Function
+
+' Moves the Lookback files into the case folder. Their names hold their
+' dates, so a run with a different window wouldn't replace an earlier run's
+' by name: this module's earlier Lookback files go first, whatever their
+' dates. EN Network's Lookback (.xlsx) is left alone. With nothing new to
+' move, nothing is removed.
+Private Sub MoveLookbackFiles(ByVal staged As Collection, ByVal prefix As String)
+    Dim FSO As Object, folder As String, f As String, found As Collection, item As Variant, pat As Variant
+
+    If staged.count = 0 Then Exit Sub
+    folder = Left$(prefix, InStrRev(prefix, "\"))
+    Set found = New Collection
+    For Each pat In Array("Lookback Transactions (*)" & LIST_FILE_EXT, "Lookback Pivots (*).xlsx")
+        f = Dir(prefix & CStr(pat))
+        Do While Len(f) > 0
+            found.Add folder & f
+            f = Dir()
+        Loop
+    Next pat
+    For Each item In found
+        CloseIfAlreadyOpen CStr(item)
+        Kill CStr(item)
+    Next item
+
+    Set FSO = CreateObject("Scripting.FileSystemObject")
+    For Each item In staged
+        FSO.MoveFile CStr(item), folder & FileNameOf(CStr(item))
+    Next item
+End Sub
+
+' The end of a Lookback Only export: only its own files are made, so
+' ConsolidatedData, Sheet7, the tracker and an unfinished full export kept
+' for Resume are all left as they are.
+Private Sub FinishLookbackOnly(ByVal ecmID As String, ByVal AlertID As String, _
+    ByVal saveFolderPath As String, ByVal origCalc As XlCalculation, ByVal summary As String)
+    Dim prefix As String, stagePrefix As String, dateName As String, amtName As String
+    Dim staged As Collection, lbLine As String, t0 As Double, timing As String
+
+    prefix = saveFolderPath & "\" & ecmID & "_" & AlertID & "_"
+    stagePrefix = m_tempFolder & "\" & ecmID & "_" & AlertID & "_"
+    ReadTotalColumns dateName, amtName
+
+    t0 = Timer
+    Set staged = New Collection
+    lbLine = BuildLookbackFiles(stagePrefix, dateName, amtName, staged)
+
+    SetStage "moving the files into the case folder"
+    MoveLookbackFiles staged, prefix
+    m_keepTemp = False
+    RemoveTempFolder
+    FinishRun origCalc, False
+
+    If m_readSecs >= 0 Then timing = "reading " & DurationText(m_readSecs) & ", "
+    timing = "Time taken: " & timing & "building the files " & DurationText(Timer - t0) & "."
+
+    If staged.count = 0 Then
+        MsgBox lbLine & vbCrLf & summary, vbExclamation, "Lookback Not Made"
+    Else
+        MsgBox "Lookback export complete!" & vbCrLf & vbCrLf & lbLine & vbCrLf & _
+            "All in: " & saveFolderPath & vbCrLf & vbCrLf & _
+            "ConsolidatedData, Sheet7 and the other export files were not touched." & vbCrLf & vbCrLf & _
+            summary & vbCrLf & vbCrLf & timing, vbInformation, "Success"
+    End If
+End Sub
+
+' ==========================================================
 ' Non Alerted Transaction helpers
 ' ==========================================================
 ' The first and last alerted date seen in pass 1.
@@ -3198,16 +3501,16 @@ Private Function YmdDate(ByVal s As String) As Date
     YmdDate = DateSerial(CLng(Left$(s, 4)), CLng(Mid$(s, 5, 2)), CLng(Right$(s, 2)))
 End Function
 
-' The Non Alerted rows dated winStart..winEnd (whole days), written to new
-' temporary files "Non Alerted Window n.txt"; returns their paths, with
-' rows = how many. Whatever an earlier attempt left under that name goes
-' first, so a resumed export rebuilds the list cleanly.
-Private Function KeepNonAlertedInWindow(ByVal paths As Collection, ByVal winStart As Date, _
-    ByVal winEnd As Date, ByRef rows As Long) As Collection
+' The rows of a list dated winStart..winEnd (whole days), written to new
+' temporary files "<windowBase> n.txt"; returns their paths, with rows = how
+' many. what is shown on the status bar. Whatever an earlier attempt left
+' under that name goes first, so a resumed export rebuilds the list cleanly.
+Private Function KeepRowsInWindow(ByVal paths As Collection, ByVal winStart As Date, _
+    ByVal winEnd As Date, ByVal windowBase As String, ByVal what As String, ByRef rows As Long) As Collection
     Dim item As Variant, scanned As Long, f As String, old As Collection
 
     Set old = New Collection
-    f = Dir(m_tempFolder & "\Non Alerted Window *")
+    f = Dir(m_tempFolder & "\" & windowBase & " *")
     Do While Len(f) > 0
         old.Add m_tempFolder & "\" & f
         f = Dir()
@@ -3218,13 +3521,14 @@ Private Function KeepNonAlertedInWindow(ByVal paths As Collection, ByVal winStar
 
     m_nwStart = winStart
     m_nwEnd = winEnd
-    TempOpen m_nwW, "Non Alerted Window"
+    m_nwWhat = what
+    TempOpen m_nwW, windowBase
     For Each item In paths
         ScanTempFileTotals CStr(item), 3, scanned
     Next item
     TempClose m_nwW
     rows = m_nwW.Total
-    Set KeepNonAlertedInWindow = m_nwW.Paths
+    Set KeepRowsInWindow = m_nwW.Paths
 End Function
 
 ' A list file holding only a note in A1 - EN's Non Alerted sheet when there
@@ -3275,7 +3579,8 @@ End Sub
 
 ' Adds one temporary file into the totals: mode 1 = a CP Selection file
 ' (Scenario totals), 2 = a DeDupe file (Daily totals and Sheet7's
-' figures). rows gets the file's row count added.
+' figures), 4 = a Lookback file (both). Mode 3 instead keeps the rows dated
+' in a window (KeepRowsInWindow). rows gets the file's row count added.
 Private Sub ScanTempFileTotals(ByVal p As String, ByVal mode As Long, ByRef rows As Long)
     Dim h As LongPtr
     Dim buf() As Byte, part() As Byte, have As Long, got As Long, total As Long, useEnd As Long
@@ -3283,7 +3588,7 @@ Private Sub ScanTempFileTotals(ByVal p As String, ByVal mode As Long, ByRef rows
     Dim s As String, f() As String, sinceProgress As Long, fileName As String, fileRows As Long
     Dim dv As Variant, what As String
 
-    If mode = 3 Then what = "picking the non-alerted transactions in the alerted month(s)" Else what = "adding up the pivot totals"
+    If mode = 3 Then what = m_nwWhat Else what = "adding up the pivot totals"
 
     fileName = FileNameOf(p)
     h = CreateFileW(StrPtr(p), GENERIC_READ, FILE_SHARE_READ Or FILE_SHARE_WRITE, 0, _
@@ -3331,17 +3636,20 @@ Private Sub ScanTempFileTotals(ByVal p As String, ByVal mode As Long, ByRef rows
                 isHeader = False
             ElseIf Len(s) > 0 Then
                 f = Split(s, vbTab)
-                If mode = 1 Then
-                    AddScenarioRow FieldAt(f, m_iAlert), FieldAt(f, m_iDr), FieldAt(f, m_cpTextCol), _
-                        AmountValue(FieldAt(f, m_iAmt))
-                ElseIf mode = 2 Then
-                    AddDailyRow DateValueOf(FieldAt(f, m_dateCol)), FieldAt(f, m_iDr), _
-                        AmountValue(FieldAt(f, m_iAmt)), FieldAt(f, m_iAcct)
-                Else
-                    ' mode 3: a Non Alerted row, kept if its day is in the window
+                If mode = 3 Then
+                    ' a row of a list, kept if its day is in the window
                     dv = DateValueOf(FieldAt(f, m_dateCol))
                     If VarType(dv) = vbDate Then
                         If Int(CDbl(dv)) >= CDbl(m_nwStart) And Int(CDbl(dv)) <= CDbl(m_nwEnd) Then TempAdd m_nwW, s
+                    End If
+                Else
+                    If mode <> 2 Then
+                        AddScenarioRow FieldAt(f, m_iAlert), FieldAt(f, m_iDr), FieldAt(f, m_cpTextCol), _
+                            AmountValue(FieldAt(f, m_iAmt))
+                    End If
+                    If mode <> 1 Then
+                        AddDailyRow DateValueOf(FieldAt(f, m_dateCol)), FieldAt(f, m_iDr), _
+                            AmountValue(FieldAt(f, m_iAmt)), FieldAt(f, m_iAcct)
                     End If
                 End If
                 rows = rows + 1
