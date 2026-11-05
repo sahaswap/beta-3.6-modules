@@ -51,8 +51,7 @@ Option Explicit
 '     neither Yes nor No are left out of both.
 '   - Every dated row, whatever its flag and with no dedupe, is saved as
 '     "<ECM>_<Alert>_Lookback Transactions (mm.dd.yyyy to mm.dd.yyyy)" beside
-'     them, picked the way EN Network picks its Lookback file: from the first
-'     day of the first alerted month one year back, to the last day of the
+'     them: from the first alerted day one year back, to the last day of the
 '     last alerted month. Its four pivots are in "<ECM>_<Alert>_Lookback
 '     Pivots (...).xlsx", built on totals as the main file's are.
 '   - Columns are read from the header row's first filled cell, not from
@@ -64,6 +63,16 @@ Option Explicit
 ' (the window comes from their Yes rows) and leaves ConsolidatedData, Sheet7,
 ' the tracker and every other export file alone. Its button is added to
 ' frmExportMode while this module runs - see AddLookbackChoice.
+'
+' Lookback_Pivots_From_Files builds the Lookback Pivots file from finished
+' Lookback Transactions parts, without an export - for when that last step
+' failed or is too slow to wait for. It can run in a second Excel window
+' while an export runs in the first.
+'
+' Lookback_Fix_Start_From_Files corrects parts made when the Lookback started
+' on the first of the month, without an export: it takes out the rows before
+' the new start day and saves the corrected parts and their Pivots file in a
+' new Fixed folder. The files it reads are left as they are.
 '
 ' EN and PIVOT use Power Query: it combines the folder, does the date /
 ' amount / Counterparty cleanup and filters each output sheet, which is
@@ -85,7 +94,7 @@ Option Explicit
 ' Shown on the status bar and in the Resume prompt, so it's clear which copy
 ' of this module is running (an imported module only sticks once the tool
 ' itself is saved).
-Private Const MODULE_VERSION As String = "2026-11-04a"
+Private Const MODULE_VERSION As String = "2026-11-05b"
 
 ' Legacy's Scenario pivot lists every Alert / Dr Cr / Counterparty
 ' combination. Past this many, it leaves Counterparty out: a pivot with
@@ -233,6 +242,12 @@ Private m_stCount As Double, m_stSum As Double, m_stHaveDate As Boolean, m_stFir
 Private m_stHavePos As Boolean, m_stMinPos As Double, m_stMaxPos As Double
 Private m_crSum As Double, m_drSum As Double, m_crCnt As Double, m_drCnt As Double
 Private m_acctSeen As Variant, m_acctText As String
+
+' Lookback_Pivots_From_Files: the Daily totals' group number per Dr Cr text
+' and day, so most rows need no key text or dictionary call - see AddDailyFast.
+Private Const LOOKBACK_MEMO_DAYS As Long = 100000
+Private Const MAX_LOOKBACK_PARTS As Long = 999
+Private m_dayMemo() As Long, m_memoSide(0 To 1) As String, m_memoSides As Long
 
 Sub Consolidated_AML_Workflow_Large()
 
@@ -505,10 +520,9 @@ If exportMode = "EN" Then
         GoTo CancelHandler
     End If
 
-    ' Same windows as Module9 (its comments explain both):
-    ' Lookback - first day of the first alerted month one year back, to the
-    ' last day of the last alerted month.
-    lbStart = DateSerial(Year(firstAlerted) - 1, Month(firstAlerted), 1)
+    ' Lookback - the first alerted day one year back, to the last day of the
+    ' last alerted month.
+    lbStart = LookbackStartDate(firstAlerted)
     lbEnd = DateSerial(Year(lastAlerted), Month(lastAlerted) + 1, 0)
     ' Non Alerted - the alerted month(s) only.
     winStartEN = DateSerial(Year(firstAlerted), Month(firstAlerted), 1)
@@ -3352,9 +3366,9 @@ End Function
 
 ' Builds the Lookback file(s) and its pivot file in the scratch folder and
 ' adds them to staged; returns the completion message's lines. The window
-' is EN Network's: the first day of the first alerted month one year back,
-' to the last day of the last alerted month. Every row dated in it counts,
-' whatever its flag, with no dedupe, as in EN. This overwrites the totals
+' is the first alerted day one year back, to the last day of the last
+' alerted month. Every row dated in it counts, whatever its flag, with no
+' dedupe, as in EN. This overwrites the totals
 ' (ResetTotals), so anything that needs them has to have used them by now.
 Private Function BuildLookbackFiles(ByVal stagePrefix As String, ByVal dateName As String, _
     ByVal amtName As String, ByVal staged As Collection) As String
@@ -3373,7 +3387,7 @@ Private Function BuildLookbackFiles(ByVal stagePrefix As String, ByVal dateName 
         Exit Function
     End If
 
-    lbStart = DateSerial(Year(m_winFirst) - 1, Month(m_winFirst), 1)
+    lbStart = LookbackStartDate(m_winFirst)
     lbEnd = DateSerial(Year(m_winLast), Month(m_winLast) + 1, 0)
     rangeText = "(" & Format$(lbStart, "mm.dd.yyyy") & " to " & Format$(lbEnd, "mm.dd.yyyy") & ")"
 
@@ -3417,6 +3431,13 @@ Private Function BuildLookbackFiles(ByVal stagePrefix As String, ByVal dateName 
         BuildLookbackFiles = BuildLookbackFiles & "   (too many combinations for its Scenario pivot: the " & _
             "counterparty breakdown is on its Scenario Totals sheet)" & vbCrLf
     End If
+End Function
+
+' The Lookback window's first day: the first alerted day, one year back.
+' First alert 06/22/2026 -> 06/22/2025. DateSerial drops any time of day, and
+' DateAdd takes 02/29 back to 02/28 rather than on to 03/01.
+Private Function LookbackStartDate(ByVal firstAlerted As Date) As Date
+    LookbackStartDate = DateAdd("yyyy", -1, DateSerial(Year(firstAlerted), Month(firstAlerted), Day(firstAlerted)))
 End Function
 
 ' Moves the Lookback files into the case folder. Their names hold their
@@ -3481,6 +3502,453 @@ Private Sub FinishLookbackOnly(ByVal ecmID As String, ByVal AlertID As String, _
             "ConsolidatedData, Sheet7 and the other export files were not touched." & vbCrLf & vbCrLf & _
             summary & vbCrLf & vbCrLf & timing, vbInformation, "Success"
     End If
+End Sub
+
+' ==========================================================
+' Lookback_Pivots_From_Files - the Lookback pivots from the finished parts
+' ==========================================================
+' Run from Developer > Macros when the Lookback Transactions parts exist but
+' the pivot file doesn't. Pick the folder holding the parts: it builds the
+' same Lookback Pivots file and saves it in that folder.
+'
+' Scanning the scratch folder's text files takes hours on a big case, while
+' Excel opens a finished part in far less time. So this opens each part and
+' reads just the five columns the totals need, as values, with no row text
+' to split. It uses nothing from Sheet1 or the scratch folder and changes
+' nothing else, so it can run in a second Excel window during an export.
+'
+' Lookback_Fix_Start_From_Files does the same for parts made when the Lookback
+' started on the first of the month. It asks for the first alerted day, takes
+' out the rows before the day one year back, and saves the corrected parts and
+' their Pivots file in a new "Fixed" folder inside the picked one. Each part's
+' totals are added up after its rows are cut, so the Pivots file matches the
+' saved parts. The picked folder's files aren't changed.
+' ==========================================================
+Public Sub Lookback_Pivots_From_Files()
+    LookbackFromFiles False
+End Sub
+
+Public Sub Lookback_Fix_Start_From_Files()
+    LookbackFromFiles True
+End Sub
+
+Private Sub LookbackFromFiles(ByVal fixStart As Boolean)
+    Dim origCalc As XlCalculation, folder As String, f As String, pos As Long, num As Long
+    Dim names() As String, base As String, thisBase As String, nParts As Long, p As Long
+    Dim wb As Workbook, newWb As Workbook, rowsRead As Double, t0 As Double, elapsed As Double
+    Dim cpLeftOut As Boolean, pivotName As String, scratchPath As String, target As String
+    Dim progress As String, msg As String
+    Dim firstDay As Date, newBase As String, outFolder As String, madeFolder As Boolean, prompt As String
+    Dim rowsCut As Double, notDates As Double, earliest As Double, rowsBefore As Double
+    Dim cut As Long, outParts As Long
+
+    On Error GoTo PivotsFailed
+    m_stage = "starting"
+    Set m_unsaved = New Collection
+    origCalc = Application.Calculation
+
+    With Application.FileDialog(4)      ' msoFileDialogFolderPicker
+        .Title = "Pick the folder with the Lookback Transactions parts"
+        .AllowMultiSelect = False
+        If .Show <> -1 Then Exit Sub
+        folder = .SelectedItems(1)
+    End With
+    If Right$(folder, 1) = "\" Then folder = Left$(folder, Len(folder) - 1)
+
+    ' The parts, in part order. All must be one set, with none missing.
+    ReDim names(1 To MAX_LOOKBACK_PARTS)
+    f = Dir(folder & "\" & "*_Lookback Transactions (*)*" & LIST_FILE_EXT)
+    Do While Len(f) > 0
+        pos = InStr(f, " (part ")
+        If pos > 0 Then
+            thisBase = Left$(f, pos - 1)
+            num = CLng(Val(Mid$(f, pos + 7)))
+        Else
+            thisBase = Left$(f, Len(f) - Len(LIST_FILE_EXT))
+            num = 1
+        End If
+        If Len(base) = 0 Then base = thisBase
+        If thisBase <> base Then
+            MsgBox "That folder holds Lookback Transactions files from more than one export:" & vbCrLf & vbCrLf & _
+                base & vbCrLf & thisBase & vbCrLf & vbCrLf & "Keep one set in the folder and run this again.", _
+                vbExclamation, "Lookback Pivots"
+            Exit Sub
+        End If
+        If num < 1 Or num > MAX_LOOKBACK_PARTS Then
+            MsgBox "Couldn't read the part number of " & f & ".", vbExclamation, "Lookback Pivots"
+            Exit Sub
+        End If
+        names(num) = f
+        nParts = nParts + 1
+        f = Dir()
+    Loop
+    If nParts = 0 Then
+        MsgBox "No Lookback Transactions " & LIST_FILE_EXT & " files in:" & vbCrLf & folder, _
+            vbExclamation, "Lookback Pivots"
+        Exit Sub
+    End If
+    For p = 1 To nParts
+        If Len(names(p)) = 0 Then
+            MsgBox "Part " & p & " isn't in that folder (" & nParts & " part(s) found). The totals " & _
+                "would be short, so nothing was made.", vbExclamation, "Lookback Pivots"
+            Exit Sub
+        End If
+    Next p
+
+    newBase = base
+    outFolder = folder
+    If fixStart Then
+        If Not AskLookbackStart(base, firstDay, newBase) Then Exit Sub
+        outFolder = folder & "\Fixed"
+        If Len(Dir(outFolder, vbDirectory)) > 0 Then
+            MsgBox "This folder is already there. Move or delete it, then run this again:" & vbCrLf & vbCrLf & _
+                outFolder, vbExclamation, "Lookback Pivots"
+            Exit Sub
+        End If
+        prompt = "Take out the rows dated before " & Format$(firstDay, "mm/dd/yyyy") & " from these " & nParts & _
+            " part(s)?" & vbCrLf & vbCrLf & base & vbCrLf & vbCrLf & _
+            "The corrected parts and a new Lookback Pivots file go in:" & vbCrLf & outFolder & vbCrLf & vbCrLf & _
+            "The files you picked aren't changed."
+    Else
+        prompt = "Build the Lookback Pivots file from these " & nParts & " part(s)?" & vbCrLf & vbCrLf & base & vbCrLf & _
+            vbCrLf & "It is saved in the same folder. Nothing else is changed."
+    End If
+    If MsgBox("Large export module " & MODULE_VERSION & vbCrLf & vbCrLf & prompt, _
+        vbQuestion + vbYesNo, "Lookback Pivots") <> vbYes Then Exit Sub
+
+    Application.EnableCancelKey = xlErrorHandler
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+
+    t0 = Timer
+    ResetTotals
+    ReDim m_dayMemo(0 To 1, 0 To LOOKBACK_MEMO_DAYS - 1)
+    m_memoSide(0) = "": m_memoSide(1) = "": m_memoSides = 0
+    If fixStart Then
+        MkDir outFolder
+        madeFolder = True
+    End If
+
+    For p = 1 To nParts
+        progress = "part " & p & " of " & nParts
+        If p > 1 Then
+            elapsed = Timer - t0
+            If elapsed < 0 Then elapsed = elapsed + 86400
+            progress = progress & ", about " & DurationText(elapsed / (p - 1) * (nParts - p + 1)) & " left"
+        End If
+        SetStage "Lookback pivots: opening " & progress
+        Set wb = Workbooks.Open(fileName:=folder & "\" & names(p), UpdateLinks:=0, ReadOnly:=True, AddToMru:=False)
+        m_unsaved.Add wb
+        cut = 0
+        If fixStart Then
+            SetStage "Lookback fix: taking out rows, " & progress
+            cut = DropRowsBefore(wb.Worksheets(1), firstDay, notDates, earliest)
+            rowsCut = rowsCut + cut
+        End If
+        rowsBefore = rowsRead
+        AddPartToTotals wb.Worksheets(1), progress, rowsRead
+
+        ' A part with no rows left isn't saved, and the numbering closes up.
+        target = ""
+        If fixStart And rowsRead > rowsBefore Then
+            outParts = outParts + 1
+            target = outFolder & "\" & newBase
+            If nParts > 1 Then target = target & " (part " & outParts & ")"
+            target = target & LIST_FILE_EXT
+        End If
+        If cut > 0 And Len(target) > 0 Then
+            SetStage "Lookback fix: saving " & progress
+            scratchPath = Environ$("TEMP") & "\" & FileNameOf(target)
+            wb.SaveAs fileName:=scratchPath, FileFormat:=LIST_FILE_FORMAT
+        End If
+        MarkSaved wb
+        wb.Close SaveChanges:=False
+        Set wb = Nothing
+        ' A part with nothing to take out is copied as it is, which is quicker.
+        If Len(target) > 0 Then
+            If cut > 0 Then
+                CreateObject("Scripting.FileSystemObject").MoveFile scratchPath, target
+            Else
+                CreateObject("Scripting.FileSystemObject").CopyFile folder & "\" & names(p), target
+            End If
+        End If
+    Next p
+    If rowsRead = 0 Then
+        Err.Raise vbObjectError + 1012, "modLargeExport", "No rows are left to build the pivots from."
+    End If
+
+    Set newWb = BuildTotalsPivotFile("Lookback", cpLeftOut)
+
+    ' Saved locally and moved, as the export's files are: the parts' folder
+    ' may be one OneDrive syncs.
+    SetStage "saving the Lookback pivots"
+    pivotName = Replace(newBase, "_Lookback Transactions ", "_Lookback Pivots ") & ".xlsx"
+    scratchPath = Environ$("TEMP") & "\" & pivotName
+    target = outFolder & "\" & pivotName
+    CloseIfAlreadyOpen target
+    ZoomAllSheets newWb
+    newWb.Sheets("Pivot").Activate
+    Application.DisplayAlerts = False
+    newWb.SaveAs fileName:=scratchPath, FileFormat:=51
+    MarkSaved newWb
+    newWb.Close SaveChanges:=False
+    If Len(Dir(target)) > 0 Then Kill target
+    CreateObject("Scripting.FileSystemObject").MoveFile scratchPath, target
+
+    Application.EnableCancelKey = xlInterrupt
+    Application.Calculation = origCalc
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.StatusBar = False
+
+    If fixStart Then
+        msg = "Lookback parts corrected. The new files are in:" & vbCrLf & outFolder & vbCrLf & vbCrLf & _
+            Format$(rowsRead + rowsCut, "#,##0") & " rows read from " & nParts & " part(s)." & vbCrLf & _
+            Format$(rowsCut, "#,##0") & " rows before " & Format$(firstDay, "mm/dd/yyyy") & " taken out." & vbCrLf & _
+            Format$(rowsRead, "#,##0") & " rows kept, in " & outParts & " part(s)."
+        If earliest > 0 Then msg = msg & vbCrLf & "Earliest date kept: " & Format$(CDate(earliest), "mm/dd/yyyy") & "."
+        If notDates > 0 Then
+            msg = msg & vbCrLf & Format$(notDates, "#,##0") & " kept row(s) have a date that isn't a real date: check these."
+        End If
+        msg = msg & vbCrLf & Format$(m_scnN, "#,##0") & " alert / Dr Cr / counterparty combinations."
+    Else
+        msg = "Lookback Pivots saved:" & vbCrLf & target & vbCrLf & vbCrLf & _
+            Format$(rowsRead, "#,##0") & " rows from " & nParts & " part(s)." & vbCrLf & _
+            Format$(m_scnN, "#,##0") & " alert / Dr Cr / counterparty combinations."
+    End If
+    If cpLeftOut Then
+        msg = msg & vbCrLf & "(too many combinations for its Scenario pivot: the counterparty " & _
+            "breakdown is on its Scenario Totals sheet)"
+    End If
+    MsgBox msg & vbCrLf & vbCrLf & "Time taken: " & DurationText(Timer - t0) & ".", vbInformation, "Success"
+    Exit Sub
+
+PivotsFailed:
+    Dim savedErrNum As Long, savedErrDesc As String
+    savedErrNum = Err.Number
+    savedErrDesc = Err.Description
+    On Error GoTo -1
+    On Error Resume Next
+    CloseUnsavedExports
+    Application.EnableCancelKey = xlInterrupt
+    Application.Calculation = origCalc
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.StatusBar = False
+    On Error GoTo 0
+    msg = "No Lookback Pivots file was made."
+    If madeFolder Then
+        msg = msg & vbCrLf & vbCrLf & "The files you picked aren't changed. Delete this unfinished folder " & _
+            "before running this again:" & vbCrLf & outFolder
+    End If
+    If savedErrNum = 18 Then
+        MsgBox "Stopped. " & msg, vbInformation, "Lookback Pivots"
+    Else
+        MsgBox "An unexpected error occurred while " & m_stage & ":" & vbCrLf & vbCrLf & _
+            "Error " & savedErrNum & ": " & savedErrDesc & vbCrLf & vbCrLf & msg, vbCritical, "Lookback Pivots"
+    End If
+End Sub
+
+' Asks for the case's first alerted day. Sets the Lookback start it gives and
+' the parts' base name with that start in it; False if it was cancelled or
+' the day doesn't fit these parts. They start on the first of the Lookback
+' start's month, so a day that gives another month is a mistyped one.
+Private Function AskLookbackStart(ByVal base As String, ByRef firstDay As Date, ByRef newBase As String) As Boolean
+    Dim pos As Long, rangeText As String, ok As Boolean, oldStart As Date, typed As String, alerted As Date
+
+    pos = InStrRev(base, "(")
+    If pos > 0 Then rangeText = Mid$(base, pos + 1, Len(base) - pos - 1)
+    ok = rangeText Like "##.##.#### to ##.##.####"
+    If ok Then ok = ReadTypedDate(Left$(rangeText, 10), oldStart)
+    If Not ok Then
+        MsgBox "Couldn't read the dates in this file name:" & vbCrLf & vbCrLf & base, vbExclamation, "Lookback Pivots"
+        Exit Function
+    End If
+
+    typed = InputBox("These parts start on " & Format$(oldStart, "mm/dd/yyyy") & "." & vbCrLf & vbCrLf & _
+        "Type the first alerted day of this case (mm.dd.yyyy). The Lookback will start one year before it.", _
+        "Lookback Pivots")
+    If Len(Trim$(typed)) = 0 Then Exit Function
+    If Not ReadTypedDate(typed, alerted) Then
+        MsgBox "Couldn't read that date. Type it as mm.dd.yyyy.", vbExclamation, "Lookback Pivots"
+        Exit Function
+    End If
+
+    firstDay = LookbackStartDate(alerted)
+    If Year(firstDay) <> Year(oldStart) Or Month(firstDay) <> Month(oldStart) Then
+        MsgBox "A first alerted day of " & Format$(alerted, "mm/dd/yyyy") & " gives a Lookback start of " & _
+            Format$(firstDay, "mm/dd/yyyy") & ", but these parts start on " & Format$(oldStart, "mm/dd/yyyy") & _
+            ", a different month. Check the date. Nothing was changed.", vbExclamation, "Lookback Pivots"
+        Exit Function
+    End If
+    If firstDay <= oldStart Then
+        MsgBox "These parts already start on " & Format$(oldStart, "mm/dd/yyyy") & ", so there is nothing to take out.", _
+            vbInformation, "Lookback Pivots"
+        Exit Function
+    End If
+
+    newBase = Left$(base, pos) & Format$(firstDay, "mm.dd.yyyy") & Mid$(base, pos + 11)
+    AskLookbackStart = True
+End Function
+
+' mm.dd.yyyy (or with / or - between) as a date, read the same on any PC's
+' date settings; False if it isn't that or isn't a real day.
+Private Function ReadTypedDate(ByVal s As String, ByRef d As Date) As Boolean
+    s = Replace(Replace(Trim$(s), "/", "."), "-", ".")
+    If Not s Like "##.##.####" Then Exit Function
+    d = DateSerial(CLng(Mid$(s, 7, 4)), CLng(Left$(s, 2)), CLng(Mid$(s, 4, 2)))
+    ReadTypedDate = (Format$(d, "mm.dd.yyyy") = s)
+End Function
+
+' Takes the rows dated before firstDay out of an open part, keeping the rest
+' in their order, and returns how many went. Deleting scattered rows one at a
+' time would take far too long, so a helper column sends them to the bottom in
+' one sort and they go in one delete. Whole days count: a time on firstDay
+' itself stays. A date that isn't a number can't be judged, so its row stays
+' and is counted in notDates. earliest is kept as the lowest date left.
+Private Function DropRowsBefore(ByVal ws As Worksheet, ByVal firstDay As Date, _
+    ByRef notDates As Double, ByRef earliest As Double) As Long
+    Dim n As Long, r As Long, lastC As Long, dropped As Long, cutoff As Double
+    Dim dates As Variant, sortKey() As Variant
+
+    ReadPartHeader ws
+    n = PartRows(ws)
+    If n < 1 Then Exit Function
+    lastC = m_outCols
+    cutoff = CDbl(firstDay)
+    dates = ColumnValues(ws, m_dateCol, n)
+    ReDim sortKey(1 To n, 1 To 1)
+    For r = 1 To n
+        If VarType(dates(r, 1)) <> vbDouble Then
+            notDates = notDates + 1
+            sortKey(r, 1) = r
+        ElseIf dates(r, 1) < cutoff Then
+            dropped = dropped + 1
+            sortKey(r, 1) = n + r
+        Else
+            If earliest = 0 Or dates(r, 1) < earliest Then earliest = dates(r, 1)
+            sortKey(r, 1) = r
+        End If
+    Next r
+    If dropped = 0 Then Exit Function
+
+    If dropped < n Then
+        ws.Range(ws.Cells(2, lastC + 1), ws.Cells(n + 1, lastC + 1)).Value2 = sortKey
+        ws.Range(ws.Cells(1, 1), ws.Cells(n + 1, lastC + 1)).Sort _
+            Key1:=ws.Cells(2, lastC + 1), Order1:=xlAscending, Header:=xlYes
+    End If
+    ws.Range(ws.Rows(n - dropped + 2), ws.Rows(n + 1)).Delete
+    If dropped < n Then ws.Columns(lastC + 1).Delete
+    DropRowsBefore = dropped
+End Function
+
+' Every Lookback row has a date, so the date column gives a part's row count.
+Private Function PartRows(ByVal ws As Worksheet) As Long
+    PartRows = ws.Cells(ws.Rows.count, m_dateCol).End(xlUp).row - 1
+End Function
+
+' One finished Lookback part's rows into the totals. The whole sheet is
+' open, but only these columns are read. rowsRead gets its row count added.
+Private Sub AddPartToTotals(ByVal ws As Worksheet, ByVal progress As String, ByRef rowsRead As Double)
+    Dim n As Long, r As Long
+    Dim alertV As Variant, drV As Variant, cpV As Variant, amtV As Variant, dateV As Variant
+
+    ReadPartHeader ws
+    n = PartRows(ws)
+    If n < 1 Then Exit Sub
+
+    SetStage "Lookback pivots: reading " & progress
+    alertV = ColumnValues(ws, m_iAlert, n)
+    drV = ColumnValues(ws, m_iDr, n)
+    cpV = ColumnValues(ws, m_cpTextCol, n)
+    amtV = ColumnValues(ws, m_iAmt, n)
+    dateV = ColumnValues(ws, m_dateCol, n)
+
+    For r = 1 To n
+        AddScenarioRow alertV(r, 1), drV(r, 1), cpV(r, 1), amtV(r, 1)
+        AddDailyFast dateV(r, 1), drV(r, 1), amtV(r, 1)
+        If r Mod 100000 = 0 Then
+            SetStage "Lookback pivots: adding up " & progress & " (" & Format$(r, "#,##0") & " rows of this part)"
+        End If
+    Next r
+    rowsRead = rowsRead + n
+End Sub
+
+' A finished part's header row into m_headerNames, and the columns found in it.
+Private Sub ReadPartHeader(ByVal ws As Worksheet)
+    Dim lastC As Long, j As Long, hdr As Variant, dateName As String, amtName As String
+
+    lastC = ws.Cells(1, ws.Columns.count).End(xlToLeft).Column
+    If lastC < 2 Then
+        Err.Raise vbObjectError + 1012, "modLargeExport", ws.Parent.Name & " has no header row."
+    End If
+    hdr = ws.Range(ws.Cells(1, 1), ws.Cells(1, lastC)).Value2
+    m_outCols = lastC
+    ReDim m_headerNames(1 To lastC)
+    For j = 1 To lastC
+        m_headerNames(j) = CStr(hdr(1, j))
+    Next j
+    m_dateCol = FindHeaderIndex(m_headerNames, "Transaction Date", False)
+    m_cpTextCol = 0
+    If m_headerNames(lastC) = "Counterparty" Then m_cpTextCol = lastC
+    ReadTotalColumns dateName, amtName
+    If m_dateCol = 0 Or m_iAmt = 0 Then
+        Err.Raise vbObjectError + 1012, "modLargeExport", ws.Parent.Name & " has no Transaction Date or Transaction Amount column."
+    End If
+End Sub
+
+' Rows 2 to n + 1 of a column, as an array 1 to n by 1 to 1 (all Empty when
+' col is 0: the column isn't in the file).
+Private Function ColumnValues(ByVal ws As Worksheet, ByVal col As Long, ByVal n As Long) As Variant
+    Dim v() As Variant
+    If col = 0 Or n = 1 Then
+        ReDim v(1 To n, 1 To 1)
+        If col > 0 Then v(1, 1) = ws.Cells(2, col).Value2
+        ColumnValues = v
+    Else
+        ColumnValues = ws.Range(ws.Cells(2, col), ws.Cells(n + 1, col)).Value2
+    End If
+End Function
+
+' One row of a finished part into the Daily totals. The first row of each
+' day and Dr Cr gets its group from DailyGroup; later ones get the same
+' number from m_dayMemo. Any other value (no Dr Cr, a third spelling of it,
+' a date that isn't a number) goes to DailyGroup every time, so the memo
+' only ever saves work and can't change a total. Sheet7's figures are left
+' out: this macro doesn't touch Sheet7.
+Private Sub AddDailyFast(ByVal dv As Variant, ByVal side As Variant, ByVal amt As Variant)
+    Dim slot As Long, dayNo As Long, g As Long
+
+    slot = -1
+    If VarType(dv) = vbDouble And VarType(side) = vbString Then
+        If dv >= 0 And dv < LOOKBACK_MEMO_DAYS And Len(side) > 0 Then
+            dayNo = Int(dv)
+            If side = m_memoSide(0) Then
+                slot = 0
+            ElseIf side = m_memoSide(1) Then
+                slot = 1
+            ElseIf m_memoSides < 2 Then
+                slot = m_memoSides
+                m_memoSide(slot) = side
+                m_memoSides = m_memoSides + 1
+            End If
+        End If
+    End If
+
+    If slot >= 0 Then g = m_dayMemo(slot, dayNo)
+    If g = 0 Then
+        If VarType(dv) = vbDouble Then
+            If dv >= 0 And dv < LOOKBACK_MEMO_DAYS Then dv = CDate(dv)
+        End If
+        g = DailyGroup(dv, side)
+        If slot >= 0 Then m_dayMemo(slot, dayNo) = g
+    End If
+    If IsNumber(amt) Then m_daySum(g) = m_daySum(g) + amt
+    If Not IsBlankValue(amt) Then m_dayCnt(g) = m_dayCnt(g) + 1
 End Sub
 
 ' ==========================================================
@@ -3731,11 +4199,11 @@ Private Sub AddScenarioRow(ByVal alertV As Variant, ByVal drV As Variant, ByVal 
     If Not IsBlankValue(amt) Then m_scnCnt(g) = m_scnCnt(g) + 1
 End Sub
 
-' One DeDupe row into the Daily totals and Sheet7's figures.
-Private Sub AddDailyRow(ByVal dv As Variant, ByVal side As Variant, ByVal amt As Variant, ByVal acct As Variant)
+' The Daily totals' group for a day and Dr Cr, made if it is new. A date in
+' dv comes back as the whole day.
+Private Function DailyGroup(ByRef dv As Variant, ByVal side As Variant) As Long
     Dim k As String, g As Long, prevN As Long
 
-    ' Daily totals: per day / Dr Cr
     If VarType(dv) = vbDate Then
         dv = CDate(Int(CDbl(dv)))
         k = "D" & CStr(CLng(CDbl(dv)))
@@ -3754,6 +4222,15 @@ Private Sub AddDailyRow(ByVal dv As Variant, ByVal side As Variant, ByVal amt As
         m_dayDate(g) = dv
         m_dayDr(g) = side
     End If
+    DailyGroup = g
+End Function
+
+' One DeDupe row into the Daily totals and Sheet7's figures.
+Private Sub AddDailyRow(ByVal dv As Variant, ByVal side As Variant, ByVal amt As Variant, ByVal acct As Variant)
+    Dim g As Long
+
+    ' Daily totals: per day / Dr Cr
+    g = DailyGroup(dv, side)
     If IsNumber(amt) Then m_daySum(g) = m_daySum(g) + amt
     If Not IsBlankValue(amt) Then m_dayCnt(g) = m_dayCnt(g) + 1
 
