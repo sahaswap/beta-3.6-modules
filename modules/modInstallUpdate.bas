@@ -582,8 +582,8 @@ Public Sub InstallUpdate_Step2()
         ws.Cells(17, 22 + c).Value = heads(c)
     Next c
     InputTip ws.Range("W14,W18:W22"), "Negative News", _
-        "Leave blank to search the name without legal extensions (LLC, Inc...), middle names " & _
-        "or suffixes, as the procedure asks - or type the name to search."
+        "Leave blank to search the name as it is, without a legal extension (LLC, Inc...) - " & _
+        "or type the name to search."
     InputTip ws.Range("X14:Z14,X18:Z22"), "Other Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
     InputTip ws.Range("AA14,AA18:AA22"), "Phone", _

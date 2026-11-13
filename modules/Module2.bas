@@ -3721,10 +3721,9 @@ End Sub
 '   - Name + Address, for each of those addresses;
 '   - Telephone, for each number given;
 '   - Email, for each address given (searched as an exact phrase);
-'   - Negative News: the procedure string with the Negative News name,
-'     which leaves out the non-essential name elements (legal extension,
-'     middle names / initials, suffixes) - the only search that uses the
-'     shortened name.
+'   - Negative News: the procedure string with the Negative News name - the
+'     name typed in W, or else the name as recorded without its legal
+'     extension (LLC, Inc...), every other word kept.
 ' Files: <prefix><n>_<kind>.pdf, page 2 as "<kind> p2".
 ' ==========================================================
 Private Sub QueueEntitySearches(ByVal tasks As Collection, ByVal folder As String, _
@@ -3831,71 +3830,18 @@ Private Function InList(ByVal c As Collection, ByVal s As String) As Boolean
     Next item
 End Function
 
-' The name without the elements the procedure calls non-essential for
-' string searches: an entity's legal extension (LLC, Inc, Ltd...); for a
-' person, a generational suffix (Jr, Sr, II, III, IV, V) and any middle
-' names or initials - first and last name kept. A name that reads as a
-' business (a legal extension, a business word such as Trading / Group /
-' Services, "&", a digit or a web domain) only ever loses its legal
-' extension. The analyst sees and can correct the result.
-Private Function ShortenName(ByVal fullName As String) As String
-    Dim s As String, legal As String, w() As String, n As Long, lastW As String
-
+' The Negative News name when none is typed: the name as it is, without an
+' entity's legal extension (LLC, Inc, Ltd...). Every other word stays -
+' middle names, initials and suffixes too - so the exact phrase searched is
+' the name as recorded.
+Private Function NegNewsName(ByVal fullName As String) As String
+    Dim s As String
     s = Trim$(Replace(fullName, Chr(160), " "))
     Do While InStr(s, "  ") > 0
         s = Replace(s, "  ", " ")
     Loop
-    If s = "" Then Exit Function
-
-    legal = StripLegalExtension(s)
-    If legal <> "" Then
-        ShortenName = legal
-        Exit Function
-    End If
-    If LooksLikeBusiness(s) Then
-        ShortenName = s
-        Exit Function
-    End If
-
-    w = Split(s, " ")
-    n = UBound(w) + 1
-    lastW = UCase$(Replace(Replace(w(n - 1), ".", ""), ",", ""))
-    If n >= 3 And (lastW = "JR" Or lastW = "SR" Or lastW = "II" Or lastW = "III" Or _
-                   lastW = "IV" Or lastW = "V") Then
-        n = n - 1
-        w(n - 1) = Replace(w(n - 1), ",", "")
-    End If
-    If n >= 3 Then
-        ShortenName = w(0) & " " & w(n - 1)
-    ElseIf n = 2 Then
-        ShortenName = w(0) & " " & w(1)
-    Else
-        ShortenName = w(0)
-    End If
-End Function
-
-Private Function LooksLikeBusiness(ByVal s As String) As Boolean
-    Dim u As String, words As Variant, i As Long
-    u = " " & UCase$(s) & " "
-    If InStr(u, "&") > 0 Or u Like "*[0-9]*" Then LooksLikeBusiness = True: Exit Function
-    If InStr(u, ".COM") > 0 Or InStr(u, ".NET") > 0 Or InStr(u, ".ORG") > 0 Or InStr(u, ".IO") > 0 Then
-        LooksLikeBusiness = True
-        Exit Function
-    End If
-    words = Array("TRADING", "TRADE", "GROUP", "HOLDING", "HOLDINGS", "SERVICE", "SERVICES", "SOLUTIONS", _
-        "TECH", "TECHNOLOGY", "TECHNOLOGIES", "INTERNATIONAL", "GLOBAL", "ENTERPRISE", "ENTERPRISES", _
-        "INDUSTRIES", "INVESTMENT", "INVESTMENTS", "CAPITAL", "PARTNERS", "MANAGEMENT", "CONSULTING", _
-        "MARKETING", "SYSTEMS", "BANK", "PAY", "PAYMENTS", "FINANCE", "FINANCIAL", "STORE", "SHOP", _
-        "MARKET", "FOODS", "LOGISTICS", "VENTURES", "ASSOCIATES", "AGENCY", "STUDIO", "MEDIA", "HOTEL", _
-        "RESTAURANT", "PHARMACY", "MOTORS", "AUTO", "IMPORT", "EXPORT", "DISTRIBUTION", "SUPPLY", _
-        "CONSTRUCTION", "REALTY", "PROPERTIES", "FOUNDATION", "TRUST", "CHURCH", "SCHOOL", "UNIVERSITY", _
-        "COLLEGE", "CLINIC", "HOSPITAL", "INSURANCE", "EXCHANGE", "LABS", "LAB", "NETWORK", "DIGITAL")
-    For i = LBound(words) To UBound(words)
-        If InStr(u, " " & words(i) & " ") > 0 Then
-            LooksLikeBusiness = True
-            Exit Function
-        End If
-    Next i
+    NegNewsName = StripLegalExtension(s)
+    If NegNewsName = "" Then NegNewsName = s
 End Function
 
 ' A cell value as text; "" for an error value (#N/A etc.).
@@ -3954,8 +3900,8 @@ End Function
 ' Beside the customer and counterparty rows, in columns V:AB (laid out by
 ' modInstallUpdate):
 '   V      Listed Entity - a tick box; ticked, no Negative News search
-'   W      Negative News name. Blank = the name without its legal
-'          extension, middle names or suffixes (Operating Manual 4.7).
+'   W      Negative News name. Blank = the name as recorded, without its
+'          legal extension (LLC, Inc...).
 '   X:Z    up to 3 other addresses
 '   AA     phone(s), AB email(s) - several separated by ;
 '   Customer:        banner row 12 ("Customer OSDD Inputs", beside
@@ -4128,7 +4074,7 @@ Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal r As Long, ByVal fullNam
         negName = ""
     Else
         negName = NormalizeSpaces(CellStr(ws.Range("W" & r).Value))
-        If negName = "" Then negName = ShortenName(fullName)
+        If negName = "" Then negName = NegNewsName(fullName)
     End If
 
     typed = CellStr(ws.Range("X" & r).Value) & ";" & CellStr(ws.Range("Y" & r).Value) & ";" & _
