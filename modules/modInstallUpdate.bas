@@ -20,6 +20,11 @@ Attribute VB_Name = "modInstallUpdate"
 '     narrative, Rename and PDF Merge take 5 counterparties (and the Rename
 '     form offers CTS Report for counterparties); ThisWorkbook
 '     fits Sheet1 to the window on opening
+'   - Sheet1's code: a name typed or pasted in J13 / J18-J22 fills the
+'     Negative News cell beside it with the name OSDD Search will search
+'     (Module2 OsddFillNegNews); ThisWorkbook: Ctrl+V on Sheet1 pastes as
+'     plain text into the selected cell (Module2 OsddPaste), and is Excel's
+'     own paste in other workbooks
 ' Step 2, Sheet1 - runs by itself once step 1 has finished, so the
 ' replaced modules are really gone:
 '   - the OSDD inputs beside the customer (row 14) and each counterparty
@@ -34,7 +39,11 @@ Attribute VB_Name = "modInstallUpdate"
 '     Counterparty 6) emptied, locked and hidden
 '   - Sheet7's [Counterparties] tag on CP1-5 and [CP 6] emptied; Search
 '     Matrix rebuilt with every search OSDD Search runs (BuildOsddSearchMatrix)
-'   - the current theme applied again, Sheet1 fitted to the window
+'   - the current theme applied again (which lines up the banners' edges
+'     and takes stray line breaks off the sidebar captions), the Negative
+'     News cells filled for names already there, Sheet1 fitted to the window
+'   - what the open case has in the OSDD inputs is kept, so running this
+'     again doesn't wipe them
 '==================================================================
 Option Explicit
 
@@ -47,6 +56,7 @@ Private Const SELF As String = "modInstallUpdate"
 Private Const NEG1 As String = """ AND (arrest OR corruption OR sentencing OR money laundering OR AML OR launder OR embezzle OR evas OR evad OR crime OR corrupt OR bribe OR theft OR extort OR drug OR traffic OR trafficking OR felony OR sanction OR counterfeit OR terror OR """
 Private Const NEG2 As String = """investigat*, indict*, charge?, court, lawsuit, judgment, fines, penalties, regulat*, fraud, scam, incarcerat*)"""
 Private Const SHEET_HOOK_MARK As String = "' (Inputs V14:AB14, V18:AB22. Search Matrix updates its links when opened.)"
+Private Const NAME_HOOK_MARK As String = "' Negative News names (Module2): a name typed or pasted in J13 / J18-J22 fills the"
 Private Const RESET_LINE As String = _
     "ws.Range(""J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:S27, T27:U27, V14:AB14, V18:AB22"").Value = """""
 ' How much of RESET_LINE every earlier version of that line shares.
@@ -214,7 +224,7 @@ Private Function PatchCode(ByVal proj As Object) As String
     Dim nNavyBtn As Long, nNavyTitle As Long, hasFindButton As Boolean
     Dim nBlock As Long, nSheetHook As Long, needSheetHook As Boolean, nAlertRows As Long
     Dim nRenRow As Long, nRenCts As Long, nIso3 As Long
-    Dim openNote As String, out As String, smNote As String
+    Dim openNote As String, out As String, smNote As String, nameNote As String, pasteNote As String
 
     For Each comp In proj.VBComponents
         If comp.Name <> SELF And Left$(comp.Name, 10) <> "zOldModule" Then
@@ -399,6 +409,8 @@ Private Function PatchCode(ByVal proj As Object) As String
         cm.AddFromString vbCrLf & "Private Sub Workbook_BeforeClose(Cancel As Boolean)" & vbCrLf & _
             "    Application.OnKey ""^+t""" & vbCrLf & "End Sub"
     End If
+    pasteNote = WorkbookPasteKey(cm)
+    nameNote = SheetNameHook(proj)
 
     out = Item(nPicker, 1, "Sheet1's code: theme picker moved to the hidden cell " & PICKER_NEW)
     out = out & Item(nReset + nResetDone, 1, "Reset clears the OSDD panel" & IIf(nReset = 0 And nResetDone > 0, " (already)", ""))
@@ -419,8 +431,102 @@ Private Function PatchCode(ByVal proj As Object) As String
     out = out & Item(nRenCts, 2, "Rename form: CTS Report for counterparties")
     out = out & "   ThisWorkbook fits Sheet1 and sets Ctrl+Shift+T on opening: " & openNote & vbCrLf
     out = out & "   Search Matrix refreshes its links when opened: " & smNote & vbCrLf
+    out = out & "   Sheet1's code: a name fills its Negative News cell: " & nameNote & vbCrLf
+    out = out & "   ThisWorkbook: Ctrl+V on Sheet1 pastes as plain text: " & pasteNote & vbCrLf
     PatchCode = out
 End Function
+
+' Sheet1's Worksheet_Change: a name typed or pasted in J13 / J18-J22 fills
+' its Negative News cell (Module2 OsddFillNegNews). It goes after the
+' capitalising, so the cell gets the name as the search reads it, and before
+' Search Matrix's links are refreshed, so they see it. The call is guarded:
+' without the new Module2 it is just skipped.
+Private Function SheetNameHook(ByVal proj As Object) As String
+    Dim cm As Object, ps As Long, pc As Long, i As Long, at As Long, anchor As Variant
+    Dim ln As String, ind As String, back As String
+
+    On Error Resume Next
+    Set cm = proj.VBComponents(ThisWorkbook.Sheets("Sheet1").CodeName).CodeModule
+    ps = cm.ProcStartLine("Worksheet_Change", 0)
+    pc = cm.ProcCountLines("Worksheet_Change", 0)
+    On Error GoTo 0
+    If cm Is Nothing Then
+        SheetNameHook = "NOT DONE - Sheet1's code module not found"
+        Exit Function
+    End If
+    If ps = 0 Or pc = 0 Then
+        SheetNameHook = "NOT DONE - Sheet1's code has no Worksheet_Change"
+        Exit Function
+    End If
+    If InStr(cm.Lines(1, cm.CountOfLines), NAME_HOOK_MARK) > 0 Then
+        SheetNameHook = "already there"
+        Exit Function
+    End If
+    For Each anchor In Array("stepName = ""6b. Refreshing Search Matrix Hyperlinks""", "stepName = ""7. Protecting Sheet""")
+        For i = ps To ps + pc - 1
+            If Trim$(cm.Lines(i, 1)) = anchor Then
+                at = i
+                Exit For
+            End If
+        Next i
+        If at > 0 Then Exit For
+    Next anchor
+    If at = 0 Then
+        SheetNameHook = "NOT DONE - add  Application.Run ""OsddFillNegNews"", Intersect(target, " & _
+            "Me.Range(""J13,J18:J22""))  to Sheet1's Worksheet_Change, after its capitalising"
+        Exit Function
+    End If
+    ln = cm.Lines(at, 1)
+    ind = Space$(Len(ln) - Len(LTrim$(ln)))
+    back = "On Error GoTo 0"
+    If InStr(cm.Lines(ps, pc), vbCrLf & "ErrorHandler:") > 0 Then back = "On Error GoTo ErrorHandler"
+    cm.InsertLines at, ind & NAME_HOOK_MARK & vbCrLf & _
+        ind & "' Negative News cell beside it with the name OSDD Search will search." & vbCrLf & _
+        ind & "On Error Resume Next" & vbCrLf & _
+        ind & "If Not Intersect(target, Me.Range(""J13,J18:J22"")) Is Nothing Then _" & vbCrLf & _
+        ind & "    Application.Run ""OsddFillNegNews"", Intersect(target, Me.Range(""J13,J18:J22""))" & vbCrLf & _
+        ind & back
+    SheetNameHook = "added"
+End Function
+
+' ThisWorkbook: Ctrl+V runs OsddPaste (Module2) while this workbook is the
+' active one - set on opening and on coming back to it, let go on leaving it
+' and on closing it, so other workbooks keep Excel's own Ctrl+V and the key
+' never reopens this one.
+Private Function WorkbookPasteKey(ByVal cm As Object) As String
+    Const SETKEY As String = "    Application.OnKey ""^v"", ""'"" & Me.Name & ""'!OsddPaste""   ' Ctrl+V on Sheet1: plain-text paste (Module2)"
+    Const FREEKEY As String = "    Application.OnKey ""^v""   ' Excel's own Ctrl+V elsewhere"
+    If cm.CountOfLines > 0 Then
+        If InStr(cm.Lines(1, cm.CountOfLines), "OsddPaste") > 0 Then
+            WorkbookPasteKey = "already there"
+            Exit Function
+        End If
+    End If
+    AddToEvent cm, "Workbook_Open", "()", SETKEY
+    AddToEvent cm, "Workbook_Activate", "()", SETKEY
+    AddToEvent cm, "Workbook_Deactivate", "()", FREEKEY
+    AddToEvent cm, "Workbook_BeforeClose", "(Cancel As Boolean)", FREEKEY
+    WorkbookPasteKey = "added"
+End Function
+
+' Puts ln first in ThisWorkbook's event procedure procName, adding the
+' procedure when the workbook has none.
+Private Sub AddToEvent(ByVal cm As Object, ByVal procName As String, ByVal args As String, ByVal ln As String)
+    Dim i As Long, t As String
+    For i = 1 To cm.CountOfLines
+        t = Trim$(cm.Lines(i, 1))
+        If t Like "Sub " & procName & "(*" Or t Like "Private Sub " & procName & "(*" Or _
+           t Like "Public Sub " & procName & "(*" Then
+            ' Past a heading carried onto the next line.
+            Do While Right$(RTrim$(cm.Lines(i, 1)), 2) = " _" And i < cm.CountOfLines
+                i = i + 1
+            Loop
+            cm.InsertLines i + 1, ln
+            Exit Sub
+        End If
+    Next i
+    cm.AddFromString vbCrLf & "Private Sub " & procName & args & vbCrLf & ln & vbCrLf & "End Sub"
+End Sub
 
 ' The lines Sheet1's Worksheet_Change gets, indented by ind. Only an edit
 ' that left a link behind (an email Excel turned into one) costs anything;
@@ -454,6 +560,7 @@ Public Sub InstallUpdate_Step2()
     Dim heads As Variant, c As Long, r As Variant, f As String, themeList As String, themeVal As String
     Dim key As String, evts As Boolean, wbProt As Boolean, stepName As String
     Dim pickerErr As String, errNum As Long, errDesc As String, tagNote As String
+    Dim keepIn As Boolean, kept(0 To 5) As Variant, inRows As Variant
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
 
@@ -475,6 +582,16 @@ Public Sub InstallUpdate_Step2()
     wbProt = ThisWorkbook.ProtectStructure
     If wbProt Then ThisWorkbook.Unprotect Password:=PWD
     ws.Unprotect Password:=PWD
+
+    ' What the open case has in the OSDD inputs, put back once they are laid
+    ' out again - so running this again doesn't wipe them.
+    inRows = Array(14, 18, 19, 20, 21, 22)
+    keepIn = (Left$(CStr(ws.Range("W13").Value), 13) = "Negative News")
+    If keepIn Then
+        For c = 0 To 5
+            kept(c) = ws.Range("V" & inRows(c) & ":AB" & inRows(c)).Value
+        Next c
+    End If
 
     ' Whatever earlier layouts put to the right of the form, and the old
     ' visible theme picker, cleared.
@@ -582,8 +699,8 @@ Public Sub InstallUpdate_Step2()
         ws.Cells(17, 22 + c).Value = heads(c)
     Next c
     InputTip ws.Range("W14,W18:W22"), "Negative News", _
-        "Leave blank to search the name as it is, without a legal extension (LLC, Inc...) - " & _
-        "or type the name to search."
+        "Fills in by itself with the name the search uses (the name without LLC, Inc...). " & _
+        "Change it here if needed - after the name is final."
     InputTip ws.Range("X14:Z14,X18:Z22"), "Other Address", _
         "Any other address identified for this entity. Each gets an Address and a Name + Address search."
     InputTip ws.Range("AA14,AA18:AA22"), "Phone", _
@@ -635,6 +752,16 @@ Public Sub InstallUpdate_Step2()
         End With
     Next r
 
+    If keepIn Then
+        stepName = "putting the open case's OSDD inputs back"
+        For c = 0 To 5
+            ws.Range("V" & inRows(c) & ":AB" & inRows(c)).Value = kept(c)
+            If VarType(kept(c)(1, 1)) = vbBoolean Then
+                If kept(c)(1, 1) Then ws.CheckBoxes("OSDD Listed " & inRows(c)).Value = xlOn
+            End If
+        Next c
+    End If
+
     ' Risk colours on the country risk cells (PDF Risk Class R27, Excel Risk
     ' Class T27): solid fills with their own text colour, so they read the
     ' same in every theme. Every older rule on those rows goes first - the
@@ -673,6 +800,8 @@ Public Sub InstallUpdate_Step2()
     ' inputs, so the theme styles them like the rest; then the inputs take
     ' its colours and Sheet1 is fitted to the window.
     Application.Run "ApplyThemeByKey", key
+    ' Negative News cells for the names already on the sheet, where empty.
+    Application.Run "OsddFillNegNews", ws.Range("J13,J18:J22"), True
     Application.Run "StyleOsddInputs"
     Application.Run "RefreshOsddMatrix"
     Application.Run "FitSheet1ToWindow"
@@ -684,6 +813,8 @@ Public Sub InstallUpdate_Step2()
         "5 counterparties." & _
         vbCrLf & vbCrLf & _
         "Themes: Ctrl+Shift+T (nothing on the sheet any more)." & vbCrLf & vbCrLf & _
+        "Negative News fills in by itself from each name - change it there if needed. " & _
+        "Ctrl+V on Sheet1 pastes what you copied as plain text into the selected cell." & vbCrLf & vbCrLf & _
         "Search Matrix: " & IIf(CStr(ThisWorkbook.Sheets("Search Matrix").Range("B5").Value) = "Other Address 1", _
             "rebuilt - 13 searches per entity (customer and CP 1-5), rows 2 to 79.", _
             "NOT rebuilt - send a screenshot of this message.") & vbCrLf & vbCrLf & _

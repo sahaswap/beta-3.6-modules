@@ -62,6 +62,17 @@ ByVal lParam As LongPtr) As LongPtr
 Private Declare PtrSafe Function IsWindowVisible Lib "user32" (ByVal hwnd As LongPtr) As Long
 Private Declare PtrSafe Function GetWindowText Lib "user32" Alias "GetWindowTextA" _
 (ByVal hwnd As LongPtr, ByVal lpString As String, ByVal cch As Long) As Long
+' The clipboard's text, read and put back, for Sheet1's Ctrl+V (OsddPaste).
+Private Declare PtrSafe Function IsClipboardFormatAvailable Lib "user32" (ByVal wFormat As Long) As Long
+Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
+Private Declare PtrSafe Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
+Private Declare PtrSafe Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
+Private Declare PtrSafe Function GlobalLock Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
+Private Declare PtrSafe Function GlobalUnlock Lib "kernel32" (ByVal hMem As LongPtr) As Long
+Private Declare PtrSafe Function GlobalFree Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
+Private Declare PtrSafe Function lstrlenW Lib "kernel32" (ByVal lpString As LongPtr) As Long
+Private Declare PtrSafe Sub MoveMemory Lib "kernel32" Alias "RtlMoveMemory" _
+(ByVal dest As LongPtr, ByVal src As LongPtr, ByVal bytes As LongPtr)
 #Else
 Private Declare Function ShellExecute Lib "shell32.dll" Alias "ShellExecuteA" _
 (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, _
@@ -96,6 +107,16 @@ ByVal lParam As Long) As Long
 Private Declare Function IsWindowVisible Lib "user32" (ByVal hwnd As Long) As Long
 Private Declare Function GetWindowText Lib "user32" Alias "GetWindowTextA" _
 (ByVal hwnd As Long, ByVal lpString As String, ByVal cch As Long) As Long
+Private Declare Function IsClipboardFormatAvailable Lib "user32" (ByVal wFormat As Long) As Long
+Private Declare Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As Long
+Private Declare Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As Long) As Long
+Private Declare Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As Long) As Long
+Private Declare Function GlobalLock Lib "kernel32" (ByVal hMem As Long) As Long
+Private Declare Function GlobalUnlock Lib "kernel32" (ByVal hMem As Long) As Long
+Private Declare Function GlobalFree Lib "kernel32" (ByVal hMem As Long) As Long
+Private Declare Function lstrlenW Lib "kernel32" (ByVal lpString As Long) As Long
+Private Declare Sub MoveMemory Lib "kernel32" Alias "RtlMoveMemory" _
+(ByVal dest As Long, ByVal src As Long, ByVal bytes As Long)
 #End If
 
 ' Win32 MessageBox flags used by TopMostMsgBox.
@@ -3844,6 +3865,15 @@ Private Function NegNewsName(ByVal fullName As String) As String
     If NegNewsName = "" Then NegNewsName = s
 End Function
 
+' The Negative News name OSDD Search searches for a name as typed on Sheet1:
+' cleaned the way the search cleans names, then NegNewsName. Sheet1 shows it
+' in the Negative News cell beside the name (OsddFillNegNews).
+Public Function OsddNegNewsName(ByVal rawName As String) As String
+    Dim s As String
+    s = SanitizeFileNamePart(Trim$(rawName))
+    If s <> "" Then OsddNegNewsName = NegNewsName(s)
+End Function
+
 ' A cell value as text; "" for an error value (#N/A etc.).
 Private Function CellStr(ByVal x As Variant) As String
     If Not IsError(x) Then CellStr = CStr(x)
@@ -3900,8 +3930,10 @@ End Function
 ' Beside the customer and counterparty rows, in columns V:AB (laid out by
 ' modInstallUpdate):
 '   V      Listed Entity - a tick box; ticked, no Negative News search
-'   W      Negative News name. Blank = the name as recorded, without its
-'          legal extension (LLC, Inc...).
+'   W      Negative News name. Filled in by itself when a name is typed or
+'          pasted (OsddFillNegNews) - the name as recorded, without its
+'          legal extension (LLC, Inc...) - and can be changed. Blank =
+'          that same name.
 '   X:Z    up to 3 other addresses
 '   AA     phone(s), AB email(s) - several separated by ;
 '   Customer:        banner row 12 ("Customer OSDD Inputs", beside
@@ -4085,4 +4117,343 @@ Private Sub ReadOsddInputs(ByVal ws As Worksheet, ByVal r As Long, ByVal fullNam
     Next item
 
     ParseContacts CellStr(ws.Range("AA" & r).Value) & ";" & CellStr(ws.Range("AB" & r).Value), phones, emails
+End Sub
+
+'==================================================================
+' SHEET1: THE NEGATIVE NEWS NAME, AND PASTING
+'==================================================================
+
+' A name typed or pasted in J13 (the customer) or J18-J22 (counterparties
+' 1-5) puts the name OSDD Search will search in the Negative News cell
+' beside it - W14 for the customer, W18-W22 for each counterparty - where
+' it can be changed. Clearing the name clears it; changing the name fills
+' it in afresh. Sheet1's Worksheet_Change calls this once it has
+' capitalised the name, so the cell shows the name as the search reads it.
+' onlyBlank: fill only empty Negative News cells (the installer, for names
+' already on the sheet).
+Public Sub OsddFillNegNews(ByVal changed As Range, Optional ByVal onlyBlank As Boolean = False)
+    Dim ws As Worksheet, cell As Range, r As Long, evts As Boolean, wasProt As Boolean, done As String
+
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    If Not changed.Worksheet Is ws Then Exit Sub
+    evts = Application.EnableEvents
+    Application.EnableEvents = False
+    wasProt = ws.ProtectContents
+    On Error Resume Next
+    If wasProt Then ws.Unprotect Password:="p7ss"
+    For Each cell In changed.Cells
+        r = cell.Row
+        If cell.Column = 10 And (r = 13 Or (r >= CP_FIRST_ROW And r <= CP_LAST_ROW)) Then
+            If InStr(done, "|" & r & "|") = 0 Then
+                done = done & "|" & r & "|"
+                With ws.Range("W" & IIf(r = 13, OSDD_CUST_ROW, r))
+                    If Not onlyBlank Or Trim$(CellStr(.Value)) = "" Then
+                        .Value = OsddNegNewsName(CellStr(ws.Range("J" & r).Value))
+                    End If
+                End With
+            End If
+        End If
+    Next cell
+    If wasProt Then ws.Protect Password:="p7ss"
+    Application.EnableEvents = evts
+End Sub
+
+' The input cells Ctrl+V pastes into: Alert Related Information, the names
+' and addresses, and the OSDD inputs (not the Listed Entity tick boxes), and
+' the country risk lookups.
+Private Const PASTE_CELLS As String = "J5:J10,J13:J14,J18:J22,T18:T22,W14:AB14,W18:AB22,G27,L27,T27"
+
+' Ctrl+V on Sheet1 (ThisWorkbook sets the key while this workbook is the
+' active one). Excel's own paste brings the source's fonts and colours (and,
+' onto a dropdown cell, removes its list), stops at merged cells, and
+' spreads text with line breaks over the cells below, where locked ones make
+' it fail. This puts what was copied into the selected input cell as plain
+' text instead, in the sheet's own look:
+'   - text copied anywhere (ECM, a web page, an email): all of it in that one
+'     cell, lines joined with ", " - with "; " in Phone and Email, the way
+'     several are entered there;
+'   - several cells copied in Excel, one under another: one each into the
+'     input cells below, as Excel would (a cell with line breaks in it stays
+'     one cell);
+'   - several input cells selected: the same text into each;
+'   - a dropdown cell takes only one of its choices.
+' What was copied stays on the clipboard, so it can go into more cells
+' (Sheet1's protection otherwise ends a copy made in Excel after the first
+' paste). Anywhere else - another sheet, a locked cell, a tick box, a
+' picture on the clipboard, cut cells - it is Excel's own paste.
+Public Sub OsddPaste()
+    Dim ws As Worksheet, start As Range, cell As Range, target As Range
+    Dim txt As String, why As String, vals As Collection, i As Long, seen As String
+
+    On Error GoTo NativePaste
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    If Not ActiveWorkbook Is ThisWorkbook Then GoTo NativePaste
+    If Not ActiveSheet Is ws Then GoTo NativePaste
+    If TypeName(Selection) <> "Range" Then GoTo NativePaste
+    If Application.CutCopyMode = xlCut Then GoTo NativePaste
+    Set start = PasteTarget(ActiveCell)
+    If start Is Nothing Then GoTo NativePaste
+    txt = ClipboardText()
+    If Len(txt) = 0 Then GoTo NativePaste
+    ' Cells copied in Excel come one per row; anything else is one value.
+    If Application.CutCopyMode = xlCopy Then
+        Set vals = ExcelCopyRows(txt)
+    Else
+        Set vals = New Collection
+        vals.Add txt
+    End If
+    If vals.Count = 0 Then Exit Sub
+    If vals.Count = 1 And Len(CellText(CStr(vals(1)), start)) = 0 Then Exit Sub
+
+    On Error GoTo Failed
+    If vals.Count > 1 Then
+        ' A column of cells copied in Excel: one each, down from the selected cell.
+        Set cell = start
+        For i = 1 To vals.Count
+            If cell Is Nothing Then Exit For
+            PutPasted cell, CellText(CStr(vals(i)), cell)
+            Set cell = NextInputBelow(cell)
+        Next i
+    ElseIf Selection.Cells.CountLarge > 1 And Selection.Cells.CountLarge <= 500 Then
+        ' The same text into every selected input cell (a merged block once).
+        For Each cell In Selection.Cells
+            Set target = PasteTarget(cell)
+            If Not target Is Nothing Then
+                If InStr(seen, "|" & target.Address & "|") = 0 Then
+                    seen = seen & "|" & target.Address & "|"
+                    PutPasted target, CellText(CStr(vals(1)), target)
+                End If
+            End If
+        Next cell
+    Else
+        PutPasted start, CellText(CStr(vals(1)), start)
+    End If
+    ' Writing to the sheet ends a copy made in Excel; put the text back so
+    ' Ctrl+V goes on working.
+    If IsClipboardFormatAvailable(13) = 0 Then PutClipboardText txt
+    Exit Sub
+
+Failed:
+    why = Err.Description
+    On Error GoTo -1
+    On Error Resume Next
+    MsgBox "That couldn't be pasted: " & why, vbExclamation, "Paste"
+    Exit Sub
+
+NativePaste:
+    On Error GoTo -1
+    On Error Resume Next
+    Application.CommandBars.ExecuteMso "Paste"
+    If Err.Number <> 0 Then
+        Err.Clear
+        ActiveSheet.Paste
+    End If
+End Sub
+
+' The input cell (top-left of its merged block) that c belongs to, or Nothing
+' when c is not one Ctrl+V pastes into.
+Private Function PasteTarget(ByVal c As Range) As Range
+    Dim t As Range
+    Set t = c.MergeArea.Cells(1, 1)
+    If Intersect(t, t.Worksheet.Range(PASTE_CELLS)) Is Nothing Then Exit Function
+    If t.Locked = True Then Exit Function
+    Set PasteTarget = t
+End Function
+
+' The next input cell down from cell in its column, past hidden rows; Nothing
+' at the end of its block.
+Private Function NextInputBelow(ByVal cell As Range) As Range
+    Dim ws As Worksheet, r As Long
+    Set ws = cell.Worksheet
+    r = cell.MergeArea.Row + cell.MergeArea.Rows.Count
+    Do While r <= 28
+        If Not ws.Rows(r).Hidden Then
+            Set NextInputBelow = PasteTarget(ws.Cells(r, cell.Column))
+            Exit Function
+        End If
+        r = r + 1
+    Loop
+End Function
+
+' One pasted value into cell, as text: a value starting = + - @ is kept as
+' text rather than taken for a formula; blank clears the cell. A dropdown
+' cell takes only one of its choices, spelt as the list spells it.
+Private Sub PutPasted(ByVal cell As Range, ByVal s As String)
+    If s = "" Then
+        cell.Value = ""                  ' a blank copied cell clears it, as Excel's paste would
+        Exit Sub
+    End If
+    If Not FitsList(cell, s) Then
+        MsgBox """" & s & """ isn't one of the choices for this cell - pick it from the list.", _
+            vbExclamation, "Paste"
+        Exit Sub
+    End If
+    If cell.NumberFormat <> "@" And s Like "[=+@-]*" Then s = "'" & s
+    cell.Value = s
+End Sub
+
+' Whether s may go in cell: always, unless the cell has a dropdown list, and
+' then only one of its choices (s becomes the choice as the list spells it).
+Private Function FitsList(ByVal cell As Range, ByRef s As String) As Boolean
+    Dim vt As Long, f As String, items As Variant, v As Variant
+
+    vt = -1
+    On Error Resume Next
+    vt = cell.Validation.Type
+    On Error GoTo 0
+    If vt <> xlValidateList Then
+        FitsList = True
+        Exit Function
+    End If
+    ' A list that lets other entries in (no error alert) - like the searchable
+    ' country lookups - takes anything, as it would when typed.
+    On Error Resume Next
+    If Not cell.Validation.ShowError Then FitsList = True
+    On Error GoTo 0
+    If FitsList Then Exit Function
+    f = cell.Validation.Formula1
+    On Error Resume Next
+    If Left$(f, 1) = "=" Then items = cell.Worksheet.Evaluate(Mid$(f, 2)) Else items = Split(f, ",")
+    On Error GoTo 0
+    If IsArray(items) Then
+        For Each v In items
+            If Not IsError(v) Then
+                If StrComp(Trim$(CStr(v)), s, vbTextCompare) = 0 Then
+                    s = Trim$(CStr(v))
+                    FitsList = True
+                    Exit Function
+                End If
+            End If
+        Next v
+    ElseIf Not IsError(items) And Not IsEmpty(items) Then
+        If StrComp(Trim$(CStr(items)), s, vbTextCompare) = 0 Then
+            s = Trim$(CStr(items))
+            FitsList = True
+        End If
+    End If
+End Function
+
+' One pasted value as the text for cell: its lines joined with ", " - with
+' "; " in Phone and Email (AA, AB), the way several are entered there.
+Private Function CellText(ByVal v As String, ByVal cell As Range) As String
+    CellText = JoinLines(PastedLines(v), IIf(cell.Column >= 27, "; ", ", "))
+End Function
+
+' Cells copied in Excel, as the clipboard's text holds them - cells split by
+' tabs, rows by line breaks, and a cell with a line break or a quote in it
+' in quotes, its quotes doubled - one value per row (a row's cells side by
+' side, a cell's own line breaks kept). Blank rows stay, so a blank copied
+' cell clears its cell as Excel's paste would; the line break Excel puts
+' after the last row adds none.
+Private Function ExcelCopyRows(ByVal txt As String) As Collection
+    Dim out As New Collection, i As Long, n As Long, ch As String
+    Dim cur As String, rowTxt As String, inQ As Boolean, atStart As Boolean
+
+    txt = Replace(Replace(txt, vbCrLf, vbLf), vbCr, vbLf)
+    n = Len(txt)
+    atStart = True
+    For i = 1 To n
+        ch = Mid$(txt, i, 1)
+        If inQ Then
+            If ch = """" Then
+                If i < n And Mid$(txt, i + 1, 1) = """" Then
+                    cur = cur & """"
+                    i = i + 1
+                Else
+                    inQ = False
+                End If
+            Else
+                cur = cur & ch
+            End If
+        ElseIf ch = """" And atStart Then
+            inQ = True
+            atStart = False
+        ElseIf ch = vbTab Then
+            rowTxt = rowTxt & cur & " "
+            cur = ""
+            atStart = True
+        ElseIf ch = vbLf Then
+            out.Add rowTxt & cur
+            rowTxt = ""
+            cur = ""
+            atStart = True
+        Else
+            cur = cur & ch
+            atStart = False
+        End If
+    Next i
+    If cur <> "" Or rowTxt <> "" Then out.Add rowTxt & cur
+    Set ExcelCopyRows = out
+End Function
+
+' The clipboard's text as lines: tabs and non-breaking spaces as spaces, runs
+' of spaces as one, each line trimmed, blank lines left out.
+Private Function PastedLines(ByVal txt As String) As Collection
+    Dim out As New Collection, parts() As String, i As Long, t As String
+    txt = Replace(Replace(txt, vbCrLf, vbLf), vbCr, vbLf)
+    parts = Split(txt, vbLf)
+    For i = LBound(parts) To UBound(parts)
+        t = Replace(Replace(parts(i), vbTab, " "), Chr(160), " ")
+        Do While InStr(t, "  ") > 0
+            t = Replace(t, "  ", " ")
+        Loop
+        t = Trim$(t)
+        If t <> "" Then out.Add t
+    Next i
+    Set PastedLines = out
+End Function
+
+Private Function JoinLines(ByVal lines As Collection, ByVal sep As String) As String
+    Dim item As Variant
+    For Each item In lines
+        JoinLines = JoinLines & IIf(JoinLines = "", "", sep) & item
+    Next item
+End Function
+
+' The clipboard's text ("" when it holds none, or can't be opened).
+Private Function ClipboardText() As String
+    Dim h As LongPtr, p As LongPtr, n As Long, s As String, k As Long
+    If IsClipboardFormatAvailable(13) = 0 Then Exit Function        ' 13 = CF_UNICODETEXT
+    For k = 1 To 5
+        If OpenClipboard(0) <> 0 Then Exit For
+        DoEvents
+    Next k
+    If k > 5 Then Exit Function
+    h = GetClipboardData(13)
+    If h <> 0 Then
+        p = GlobalLock(h)
+        If p <> 0 Then
+            n = lstrlenW(p)
+            If n > 0 Then
+                s = String$(n, 0)
+                MoveMemory StrPtr(s), p, n * 2
+            End If
+            GlobalUnlock h
+        End If
+    End If
+    CloseClipboard
+    ClipboardText = s
+End Function
+
+' Puts s on the clipboard as text.
+Private Sub PutClipboardText(ByVal s As String)
+    Dim h As LongPtr, p As LongPtr, bytes As Long
+    If Len(s) = 0 Then Exit Sub
+    bytes = (Len(s) + 1) * 2
+    h = GlobalAlloc(2, bytes)                                       ' 2 = GMEM_MOVEABLE
+    If h = 0 Then Exit Sub
+    p = GlobalLock(h)
+    If p = 0 Then
+        GlobalFree h
+        Exit Sub
+    End If
+    MoveMemory p, StrPtr(s), bytes
+    GlobalUnlock h
+    If OpenClipboard(0) = 0 Then
+        GlobalFree h
+        Exit Sub
+    End If
+    EmptyClipboard
+    If SetClipboardData(13, h) = 0 Then GlobalFree h
+    CloseClipboard
 End Sub

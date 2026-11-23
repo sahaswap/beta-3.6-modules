@@ -548,16 +548,18 @@ Private Sub RestoreSheet1Baseline()
     For Each shp In ws.Shapes
         key = shp.OnAction
         If InStr(key, "!") > 0 Then key = Mid$(key, InStrRev(key, "!") + 1)
-        If key = "" Then key = UCase$(Trim$(Replace(Replace(shp.TextFrame2.TextRange.Text, vbCr, ""), vbLf, "")))
+        If key = "" Then key = UCase$(Trim$(Replace(Replace(Replace(shp.TextFrame2.TextRange.Text, vbCr, ""), vbLf, ""), Chr$(11), "")))
         For Each s In spec
             If key = s(0) Then
                 PutShape shp, ws.Columns(s(1)).Left + s(2), ws.Rows(s(3)).Top + s(4), s(5), s(6)
+                TrimCaption shp
                 Exit For
             End If
         Next s
         For k = 0 To UBound(stack)
             If key = stack(k) Then
                 PutShape shp, ws.Columns(2).Left + 2, top0 + gap + k * (BTN_H + gap), 135.4, BTN_H
+                TrimCaption shp
                 Exit For
             End If
         Next k
@@ -615,20 +617,46 @@ Private Sub PutShape(ByVal shp As Shape, ByVal x As Single, ByVal y As Single, _
     Next k
 End Sub
 
-' Widens the sheet's banner saying txt so its right end sits at the right
-' of column lastCol, as far in from the edge as its left end is from G.
+' Puts the sheet's banner saying txt across G to lastCol, with the same side
+' inset as Customer Information's banner - the one the others are matched to
+' - so every banner's edges line up. (Each banner used to keep its own left
+' inset, and Alert Related Information sat 2pt in at both ends.)
 Private Sub StretchBanner(ByVal ws As Worksheet, ByVal txt As String, ByVal lastCol As String)
-    Dim shp As Shape, inset As Single, W As Single, k As Long
+    Dim shp As Shape, ref As Shape, inset As Single, L As Single, W As Single, k As Long
     On Error Resume Next
     Set shp = PlainBanner(ws, txt)
     If shp Is Nothing Then Exit Sub
-    inset = shp.Left - ws.Range("G1").Left
+    Set ref = PlainBanner(ws, "Customer Information")
+    If ref Is Nothing Then Set ref = shp
+    inset = ref.Left - ws.Range("G1").Left
     If inset < 0 Then inset = 0
-    W = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - shp.Left
+    L = ws.Range("G1").Left + inset
+    W = ws.Range(lastCol & "1").Left + ws.Range(lastCol & "1").Width - inset - L
     For k = 1 To 3
+        shp.Left = L
         shp.Width = W
-        If Abs(shp.Width - W) < 1 Then Exit For
+        If Abs(shp.Left - L) < 0.5 And Abs(shp.Width - W) < 1 Then Exit For
         DoEvents
+    Next k
+End Sub
+
+' Takes line breaks and spaces off the end of a sidebar caption ("OSDD
+' Search" and "Generate Narrative" had a stray line break, which sat the
+' words off-centre). Only those characters go, so the caption keeps its
+' formatting.
+Private Sub TrimCaption(ByVal shp As Shape)
+    Dim tr As Object, n As Long, ch As String, k As Long
+    On Error Resume Next
+    If Not shp.HasTextFrame Then Exit Sub
+    Set tr = shp.TextFrame2.TextRange
+    If tr Is Nothing Then Exit Sub
+    For k = 1 To 10
+        n = tr.Length
+        If n < 2 Then Exit For
+        ch = tr.Characters(n, 1).Text
+        If ch <> vbCr And ch <> vbLf And ch <> Chr$(11) And ch <> " " Then Exit For
+        tr.Characters(n, 1).Delete
+        If tr.Length >= n Then Exit For
     Next k
 End Sub
 
