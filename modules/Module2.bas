@@ -4158,11 +4158,6 @@ Public Sub OsddFillNegNews(ByVal changed As Range, Optional ByVal onlyBlank As B
     Application.EnableEvents = evts
 End Sub
 
-' The input cells Ctrl+V pastes into: Alert Related Information, the names
-' and addresses, and the OSDD inputs (not the Listed Entity tick boxes), and
-' the country risk lookups.
-Private Const PASTE_CELLS As String = "J5:J10,J13:J14,J18:J22,T18:T22,W14:AB14,W18:AB22,G27,L27,T27"
-
 ' Ctrl+V on Sheet1 (ThisWorkbook sets the key while this workbook is the
 ' active one). Excel's own paste brings the source's fonts and colours (and,
 ' onto a dropdown cell, removes its list), stops at merged cells, and
@@ -4253,6 +4248,9 @@ End Sub
 ' The input cell (top-left of its merged block) that c belongs to, or Nothing
 ' when c is not one Ctrl+V pastes into.
 Private Function PasteTarget(ByVal c As Range) As Range
+    ' The input cells: Alert Related Information, the names and addresses, the
+    ' OSDD inputs (not the Listed Entity tick boxes) and the country lookups.
+    Const PASTE_CELLS As String = "J5:J10,J13:J14,J18:J22,T18:T22,W14:AB14,W18:AB22,G27,L27,T27"
     Dim t As Range
     Set t = c.MergeArea.Cells(1, 1)
     If Intersect(t, t.Worksheet.Range(PASTE_CELLS)) Is Nothing Then Exit Function
