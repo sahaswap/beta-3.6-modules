@@ -494,11 +494,22 @@ End Function
 ' and on closing it, so other workbooks keep Excel's own Ctrl+V and the key
 ' never reopens this one.
 Private Function WorkbookPasteKey(ByVal cm As Object) As String
-    Const SETKEY As String = "    Application.OnKey ""^v"", ""'"" & Me.Name & ""'!OsddPaste""   ' Ctrl+V on Sheet1: plain-text paste (Module2)"
-    Const FREEKEY As String = "    Application.OnKey ""^v""   ' Excel's own Ctrl+V elsewhere"
+    ' Each key line guards itself: Excel can refuse a key change (it stopped in
+    ' Workbook_Deactivate on one PC), and that must never stop on the user.
+    Const SETKEY As String = "    On Error Resume Next: Application.OnKey ""^v"", ""'"" & Me.Name & ""'!OsddPaste""   ' Ctrl+V on Sheet1: plain-text paste (Module2)"
+    Const FREEKEY As String = "    On Error Resume Next: Application.OnKey ""^v""   ' Excel's own Ctrl+V elsewhere"
+    Dim i As Long, t As String, nSafe As Long
     If cm.CountOfLines > 0 Then
         If InStr(cm.Lines(1, cm.CountOfLines), "OsddPaste") > 0 Then
-            WorkbookPasteKey = "already there"
+            ' An earlier install's key lines, without the guard: given it.
+            For i = 1 To cm.CountOfLines
+                t = Trim$(cm.Lines(i, 1))
+                If Left$(t, 22) = "Application.OnKey ""^v""" Then
+                    cm.ReplaceLine i, IIf(InStr(t, "OsddPaste") > 0, SETKEY, FREEKEY)
+                    nSafe = nSafe + 1
+                End If
+            Next i
+            WorkbookPasteKey = IIf(nSafe > 0, "made safe (" & nSafe & " lines)", "already there")
             Exit Function
         End If
     End If
