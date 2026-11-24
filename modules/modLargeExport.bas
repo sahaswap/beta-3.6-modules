@@ -97,13 +97,15 @@ Option Explicit
 ' Shown on the status bar and in the Resume prompt, so it's clear which copy
 ' of this module is running (an imported module only sticks once the tool
 ' itself is saved).
-Private Const MODULE_VERSION As String = "2026-11-24a"
+Private Const MODULE_VERSION As String = "2026-11-24b"
 
 ' Legacy's Scenario pivot lists every Alert / Dr Cr / Counterparty
 ' combination. Past this many, it leaves Counterparty out: a pivot with
 ' lakhs of row items takes Excel a very long time to build and sort, and
 ' may not fit on the sheet at all. The full breakdown, largest first, is
-' then on the Scenario Totals sheet.
+' then on the Scenario Totals sheet - carried on onto "Scenario Totals
+' (2)"... past RAW_ROWS_PER_SHEET rows - and the pivot is built on their
+' totals per alert and Dr Cr (see BuildTotalsPivotFile).
 Private Const SCENARIO_PIVOT_MAX_ROWS As Long = 100000
 
 ' DeleteLeftoverTempFolders: a finished-but-unsaved run for another case is
@@ -1678,7 +1680,8 @@ Private Sub BuildTotalsPivots(ByVal wb As Workbook, ByVal wsPv As Worksheet, _
         Set cache = wb.PivotCaches.Create(SourceType:=xlDatabase, _
             SourceData:=PivotSourceAddress(wsScn.Range(wsScn.Cells(1, 1), wsScn.Cells(lastR, lastC))))
         Set ptx = cache.CreatePivotTable(TableDestination:=wsPv.Range("A3"), TableName:="ScenarioPivot")
-        cpLeftOut = (lastR - 1 > SCENARIO_PIVOT_MAX_ROWS)
+        ' Left out already when the source is the Alert Totals (the caller says).
+        cpLeftOut = cpLeftOut Or (lastR - 1 > SCENARIO_PIVOT_MAX_ROWS)
         On Error Resume Next
         With ptx
             .ManualUpdate = True        ' one recalculation at the end, not one per change
@@ -1787,6 +1790,7 @@ Private Sub DropTotalsSheets(ByVal wb As Workbook, ByVal wsPv As Worksheet, ByVa
         pt.SaveData = True
     Next pt
     SafeDeleteSheet wb, "Daily Totals"
+    SafeDeleteSheet wb, "Alert Totals"
     If Not cpLeftOut Then SafeDeleteSheet wb, "Scenario Totals"
     Application.DisplayAlerts = False       ' SafeDeleteSheet turns alerts back on
 End Sub
@@ -3169,7 +3173,7 @@ Private Sub FinishLegacyExport(ByVal wsHome As Worksheet, ByVal wsRealCD As Work
         doneMsg = doneMsg & vbCrLf & vbCrLf & "There are " & Format$(mainScnN, "#,##0") & _
             " alert / Dr Cr / counterparty combinations - too many for a pivot - so the Scenario pivot " & _
             "shows Alert Information and Dr Cr only. The full counterparty breakdown, largest first, " & _
-            "is on the Scenario Totals sheet, which is kept in the pivot file for that reason."
+            "is on the Scenario Totals sheet(s), kept in the pivot file for that reason."
     End If
     If bigCase Then
         doneMsg = doneMsg & vbCrLf & vbCrLf & _
@@ -3335,36 +3339,64 @@ End Sub
 ' A new workbook holding only the four pivots, built from the totals added
 ' up so far (m_scn*, m_day*). what names them on the status bar.
 Private Function BuildTotalsPivotFile(ByVal what As String, ByRef cpLeftOut As Boolean) As Workbook
-    Dim newWb As Workbook, ws As Worksheet, wsScn As Worksheet, wsDay As Worksheet
+    Dim newWb As Workbook, ws As Worksheet, wsScn As Worksheet, wsDay As Worksheet, wsSrc As Worksheet
     Dim wsPivot As Worksheet, outArr() As Variant, g As Long, shIdx As Long
+    Dim idx() As Long, grp() As Long, s As Long, nSheets As Long, first As Long, cnt As Long, r As Long
 
     SetStage "writing the " & what & " pivot totals (" & Format$(m_scnN, "#,##0") & " alert / Dr Cr / counterparty rows)"
     Set newWb = NewOutputWorkbook()
     Set wsScn = newWb.Sheets(1)
-    If m_scnN + 1 > wsScn.Rows.count Then
-        Err.Raise vbObjectError + 1006, "modLargeExport", "There are too many alert / Dr Cr / counterparty " & _
-            "combinations (" & Format$(m_scnN, "#,##0") & ") for the Scenario Totals sheet."
-    End If
     wsScn.Name = "Scenario Totals"
-    wsScn.Columns(3).NumberFormat = "@"     ' Counterparty as text, as its formula gave it
-    ReDim outArr(1 To m_scnN + 1, 1 To 5)
-    outArr(1, 1) = "Alert Information": outArr(1, 2) = "Dr Cr": outArr(1, 3) = "Counterparty"
-    outArr(1, 4) = "Transaction Amount": outArr(1, 5) = "Transaction Count"
-    For g = 1 To m_scnN
-        outArr(g + 1, 1) = m_scnAlert(g): outArr(g + 1, 2) = m_scnDr(g): outArr(g + 1, 3) = m_scnCp(g)
-        outArr(g + 1, 4) = m_scnSum(g): outArr(g + 1, 5) = m_scnCnt(g)
-    Next g
-    wsScn.Range("A1").Resize(m_scnN + 1, 5).Value = outArr
-    ' Too many for the pivot (see SCENARIO_PIVOT_MAX_ROWS): the sheet itself
-    ' is the breakdown, so it is put in order - alert, Dr Cr, largest first.
-    If m_scnN > SCENARIO_PIVOT_MAX_ROWS Then
-        wsScn.Range("A1").Resize(m_scnN + 1, 5).Sort _
-            Key1:=wsScn.Range("A1"), Order1:=xlAscending, _
-            Key2:=wsScn.Range("B1"), Order2:=xlAscending, _
-            Key3:=wsScn.Range("D1"), Order3:=xlDescending, Header:=xlYes
-    End If
 
-    Set wsDay = newWb.Sheets.Add(After:=wsScn)
+    ' Every alert / Dr Cr / counterparty combination. Too many for the pivot
+    ' (SCENARIO_PIVOT_MAX_ROWS): the pivot shows alert and Dr Cr only, and
+    ' these sheets are the counterparty breakdown, so they are put in order
+    ' - alert, Dr Cr, largest first - carrying on onto "Scenario Totals (2)"
+    ' ... past RAW_ROWS_PER_SHEET rows.
+    cpLeftOut = (m_scnN > SCENARIO_PIVOT_MAX_ROWS)
+    ReDim idx(1 To IIf(m_scnN > 0, m_scnN, 1))
+    For g = 1 To m_scnN
+        idx(g) = g
+    Next g
+    If cpLeftOut Then
+        SetStage "putting the " & what & " pivot totals in order (" & Format$(m_scnN, "#,##0") & " rows)"
+        grp = ScenarioGroups()
+        SortScenarioRows idx, grp
+    End If
+    nSheets = 1
+    If m_scnN > 0 Then nSheets = (m_scnN - 1) \ RAW_ROWS_PER_SHEET + 1
+    first = 1
+    For s = 1 To nSheets
+        If s = 1 Then
+            Set ws = wsScn
+        Else
+            Set ws = newWb.Sheets.Add(After:=ws)
+            ws.Name = "Scenario Totals (" & s & ")"
+        End If
+        cnt = m_scnN - first + 1
+        If cnt > RAW_ROWS_PER_SHEET Then cnt = RAW_ROWS_PER_SHEET
+        If cnt < 0 Then cnt = 0
+        ws.Columns(3).NumberFormat = "@"     ' Counterparty as text, as its formula gave it
+        ReDim outArr(1 To cnt + 1, 1 To 5)
+        outArr(1, 1) = "Alert Information": outArr(1, 2) = "Dr Cr": outArr(1, 3) = "Counterparty"
+        outArr(1, 4) = "Transaction Amount": outArr(1, 5) = "Transaction Count"
+        For r = 1 To cnt
+            g = idx(first + r - 1)
+            outArr(r + 1, 1) = m_scnAlert(g): outArr(r + 1, 2) = m_scnDr(g): outArr(r + 1, 3) = m_scnCp(g)
+            outArr(r + 1, 4) = m_scnSum(g): outArr(r + 1, 5) = m_scnCnt(g)
+        Next r
+        ws.Range("A1").Resize(cnt + 1, 5).Value = outArr
+        first = first + cnt
+    Next s
+    Erase outArr
+
+    ' The Scenario pivot's source: the combinations, or - when it leaves
+    ' Counterparty out - their totals per alert and Dr Cr, which one sheet
+    ' always holds ("Alert Totals", gone again once the pivot has them).
+    Set wsSrc = wsScn
+    If cpLeftOut Then Set wsSrc = AlertTotalsSheet(newWb, ws, grp)
+
+    Set wsDay = newWb.Sheets.Add(After:=newWb.Sheets(newWb.Sheets.count))
     wsDay.Name = "Daily Totals"
     ReDim outArr(1 To m_dayN + 1, 1 To 4)
     outArr(1, 1) = "Transaction Date": outArr(1, 2) = "Dr Cr"
@@ -3378,7 +3410,7 @@ Private Function BuildTotalsPivotFile(ByVal what As String, ByRef cpLeftOut As B
     ' Backwards, because the new workbook's other blank sheets go as it runs.
     For shIdx = newWb.Worksheets.count To 1 Step -1
         Set ws = newWb.Worksheets(shIdx)
-        If ws.Name = "Scenario Totals" Or ws.Name = "Daily Totals" Then
+        If IsSheetPart(ws.Name, "Scenario Totals") Or ws.Name = "Daily Totals" Or ws.Name = "Alert Totals" Then
             StyleHeaderRow ws
             FormatDataColumns ws, "Transaction Date", "m/d/yyyy", "Transaction Amount"
             TidyDataSheet ws
@@ -3390,9 +3422,148 @@ Private Function BuildTotalsPivotFile(ByVal what As String, ByRef cpLeftOut As B
     SetStage "building the " & what & " pivots"
     Set wsPivot = newWb.Sheets.Add(Before:=newWb.Sheets(1))
     wsPivot.Name = "Pivot"
-    BuildTotalsPivots newWb, wsPivot, wsScn, wsDay, cpLeftOut
+    BuildTotalsPivots newWb, wsPivot, wsSrc, wsDay, cpLeftOut
     DropTotalsSheets newWb, wsPivot, cpLeftOut
     Set BuildTotalsPivotFile = newWb
+End Function
+
+' Each alert / Dr Cr / counterparty combination's alert / Dr Cr group,
+' numbered in the order the groups are listed: by alert, then Dr Cr (as
+' text, any case).
+Private Function ScenarioGroups() As Long()
+    Dim d As Object, g As Long, k As String, id() As Long, keys() As String, nK As Long
+    Dim i As Long, j As Long, t As String, ti As Long, pos() As Long, rankOf() As Long, grp() As Long
+    Dim key As Variant
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.CompareMode = 1                           ' text: any case
+    ReDim id(1 To m_scnN)
+    For g = 1 To m_scnN
+        k = KeyText(m_scnAlert(g)) & vbTab & KeyText(m_scnDr(g))
+        If Not d.Exists(k) Then d.Add k, d.count + 1
+        id(g) = d(k)
+    Next g
+    nK = d.count
+    ReDim keys(1 To nK)
+    ReDim pos(1 To nK)
+    i = 0
+    For Each key In d.keys
+        i = i + 1
+        keys(i) = CStr(key)
+        pos(i) = d(key)
+    Next key
+    ' Few groups (alerts x Dr Cr), so a simple insertion sort of their names.
+    For i = 2 To nK
+        t = keys(i)
+        ti = pos(i)
+        j = i - 1
+        Do While j >= 1
+            If StrComp(keys(j), t, vbTextCompare) <= 0 Then Exit Do
+            keys(j + 1) = keys(j)
+            pos(j + 1) = pos(j)
+            j = j - 1
+        Loop
+        keys(j + 1) = t
+        pos(j + 1) = ti
+    Next i
+    ReDim rankOf(1 To nK)
+    For i = 1 To nK
+        rankOf(pos(i)) = i
+    Next i
+    ReDim grp(1 To m_scnN)
+    For g = 1 To m_scnN
+        grp(g) = rankOf(id(g))
+    Next g
+    ScenarioGroups = grp
+End Function
+
+' Puts the combinations idx holds in order: by group, then the largest
+' amount first. A merge sort, so its time stays steady however the rows
+' came in.
+Private Sub SortScenarioRows(ByRef idx() As Long, ByRef grp() As Long)
+    Dim n As Long, tmp() As Long, wid As Long, lo As Long, md As Long, hi As Long
+    Dim i As Long, j As Long, k As Long, a As Long, b As Long, takeA As Boolean
+
+    n = UBound(idx)
+    If n < 2 Then Exit Sub
+    ReDim tmp(1 To n)
+    wid = 1
+    Do While wid < n
+        lo = 1
+        Do While lo <= n
+            md = lo + wid - 1
+            If md >= n Then
+                For k = lo To n
+                    tmp(k) = idx(k)
+                Next k
+            Else
+                hi = md + wid
+                If hi > n Then hi = n
+                i = lo
+                j = md + 1
+                k = lo
+                Do While i <= md And j <= hi
+                    a = idx(i)
+                    b = idx(j)
+                    If grp(a) <> grp(b) Then
+                        takeA = (grp(a) < grp(b))
+                    Else
+                        takeA = (m_scnSum(a) >= m_scnSum(b))
+                    End If
+                    If takeA Then
+                        tmp(k) = a
+                        i = i + 1
+                    Else
+                        tmp(k) = b
+                        j = j + 1
+                    End If
+                    k = k + 1
+                Loop
+                Do While i <= md
+                    tmp(k) = idx(i)
+                    i = i + 1
+                    k = k + 1
+                Loop
+                Do While j <= hi
+                    tmp(k) = idx(j)
+                    j = j + 1
+                    k = k + 1
+                Loop
+            End If
+            lo = lo + 2 * wid
+        Loop
+        idx = tmp
+        wid = wid * 2
+    Loop
+End Sub
+
+' The totals per alert and Dr Cr, one row per group in group order, on a
+' sheet "Alert Totals" after afterWs - the Scenario pivot's source when it
+' leaves Counterparty out.
+Private Function AlertTotalsSheet(ByVal wb As Workbook, ByVal afterWs As Worksheet, ByRef grp() As Long) As Worksheet
+    Dim nG As Long, g As Long, r As Long, outArr() As Variant, ws As Worksheet
+
+    For g = 1 To m_scnN
+        If grp(g) > nG Then nG = grp(g)
+    Next g
+    ReDim outArr(1 To nG + 1, 1 To 4)
+    outArr(1, 1) = "Alert Information": outArr(1, 2) = "Dr Cr"
+    outArr(1, 3) = "Transaction Amount": outArr(1, 4) = "Transaction Count"
+    For g = 1 To m_scnN
+        r = grp(g) + 1
+        If IsEmpty(outArr(r, 3)) Then
+            outArr(r, 1) = m_scnAlert(g)
+            outArr(r, 2) = m_scnDr(g)
+            outArr(r, 3) = 0#
+            outArr(r, 4) = 0#
+        End If
+        outArr(r, 3) = outArr(r, 3) + m_scnSum(g)
+        outArr(r, 4) = outArr(r, 4) + m_scnCnt(g)
+    Next g
+    Set ws = wb.Sheets.Add(After:=afterWs)
+    ws.Name = "Alert Totals"
+    ws.Range("A1").Resize(nG + 1, 4).Value = outArr
+    Set AlertTotalsSheet = ws
 End Function
 
 ' Builds the Lookback file(s) and its pivot file in the scratch folder and
@@ -3460,7 +3631,7 @@ Private Function BuildLookbackFiles(ByVal stagePrefix As String, ByVal dateName 
         "   " & filesText & vbCrLf & "   " & FileNameOf(pivotPath) & vbCrLf
     If cpLeftOut Then
         BuildLookbackFiles = BuildLookbackFiles & "   (too many combinations for its Scenario pivot: the " & _
-            "counterparty breakdown is on its Scenario Totals sheet)" & vbCrLf
+            "counterparty breakdown is on its Scenario Totals sheet(s))" & vbCrLf
     End If
 End Function
 
@@ -3487,7 +3658,7 @@ Private Function EnLookbackParts(ByVal part1Wb As Workbook, ByVal baseM As Strin
     ByVal prefix As String, ByVal rangeText As String, ByRef rows As Double) As String
     Dim staged As New Collection, wb As Workbook, ws As Worksheet, part As Long, n As Double
     Dim stem As String, target As String, total As Double, cpLeftOut As Boolean, pivWb As Workbook
-    Dim pivPath As String, msg As String
+    Dim pivPath As String, msg As String, pivNote As String, why As String, keep As Long, w As Object
 
     m_enStageDir = Environ$("TEMP") & "\LargeExport_EN_" & Format$(Now, "yyyymmdd_hhnnss")
     MkDir m_enStageDir
@@ -3537,30 +3708,54 @@ Private Function EnLookbackParts(ByVal part1Wb As Workbook, ByVal baseM As Strin
     Loop
     rows = total
 
+    ' The parts into the case folder first, so nothing that goes wrong with
+    ' the pivots can lose them.
+    SetStage "moving the Lookback parts into the case folder"
+    MoveLookbackFiles staged, prefix
+
+    ' The pivots, from the parts' totals. If they fail, EN carries on - the
+    ' parts are saved, and Lookback_Pivots_From_Files can make them later.
+    keep = m_unsaved.count
+    On Error GoTo PivotsFailed
     SetStage "building the Lookback pivots"
     Set pivWb = BuildTotalsPivotFile("Lookback", cpLeftOut)
-    pivPath = m_enStageDir & "\" & Mid$(prefix, InStrRev(prefix, "\") + 1) & "Lookback Pivots " & rangeText & ".xlsx"
+    pivPath = m_enStageDir & "\" & FileNameOf(prefix) & "Lookback Pivots " & rangeText & ".xlsx"
     ZoomAllSheets pivWb
     pivWb.Sheets("Pivot").Activate
     Application.DisplayAlerts = False
     pivWb.SaveAs fileName:=pivPath, FileFormat:=51
     MarkSaved pivWb
     pivWb.Close SaveChanges:=False
-    staged.Add pivPath
+    CreateObject("Scripting.FileSystemObject").MoveFile pivPath, Left$(prefix, InStrRev(prefix, "\")) & FileNameOf(pivPath)
+    On Error GoTo 0
+    pivNote = "   " & FileNameOf(pivPath) & " (its pivots)"
+    If cpLeftOut Then
+        pivNote = pivNote & vbCrLf & "   (too many combinations for its Scenario pivot: the counterparty breakdown " & _
+            "is on its Scenario Totals sheet(s))"
+    End If
 
-    SetStage "moving the Lookback files into the case folder"
-    MoveLookbackFiles staged, prefix
+AfterPivots:
     RemoveEnStage
-
     msg = "Lookback Transactions - " & Format$(total, "#,##0") & " rows, more than one sheet holds, so saved " & _
         "as Legacy saves it, in " & Left$(prefix, InStrRev(prefix, "\") - 1) & ":" & vbCrLf & _
-        "   " & FileNameOf(stem) & " (part 1) to (part " & part & ")" & LIST_FILE_EXT & vbCrLf & _
-        "   " & FileNameOf(pivPath) & " (its pivots)"
-    If cpLeftOut Then
-        msg = msg & vbCrLf & "   (too many combinations for its Scenario pivot: the counterparty breakdown " & _
-            "is on its Scenario Totals sheet)"
-    End If
+        "   " & FileNameOf(stem) & " (part 1) to (part " & part & ")" & LIST_FILE_EXT & vbCrLf & pivNote
     EnLookbackParts = msg & vbCrLf & "   Earlier Lookback parts and Lookback Pivots files of this case were replaced."
+    Exit Function
+
+PivotsFailed:
+    why = Err.Description
+    On Error GoTo -1
+    On Error Resume Next
+    ' Whatever the pivot step left open, closed unsaved.
+    Do While m_unsaved.count > keep
+        Set w = m_unsaved(m_unsaved.count)
+        m_unsaved.Remove m_unsaved.count
+        w.Close SaveChanges:=False
+    Loop
+    On Error GoTo 0
+    pivNote = "   Lookback Pivots NOT made (" & why & ")." & vbCrLf & _
+        "   The parts are saved: run Lookback_Pivots_From_Files on the case folder to make it."
+    GoTo AfterPivots
 End Function
 
 ' Empty totals, and the Daily memo AddDailyFast reads, before adding up parts.
@@ -3857,7 +4052,7 @@ Private Sub LookbackFromFiles(ByVal fixStart As Boolean)
     End If
     If cpLeftOut Then
         msg = msg & vbCrLf & "(too many combinations for its Scenario pivot: the counterparty " & _
-            "breakdown is on its Scenario Totals sheet)"
+            "breakdown is on its Scenario Totals sheet(s))"
     End If
     MsgBox msg & vbCrLf & vbCrLf & "Time taken: " & DurationText(Timer - t0) & ".", vbInformation, "Success"
     Exit Sub
