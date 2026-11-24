@@ -85,16 +85,19 @@ Option Explicit
 '   - A file's "Transaction ID" header must be in its first 100 rows.
 '   - The Pivot Analysis export, which is saved into the same \Pivot
 '     folder it reads from, is not read back in as data on the next run.
-'   - EN's Raw Transactions carries on onto "Raw Transactions (2)",
-'     "(3)"... when it has more rows than one sheet holds; any other sheet
-'     that would need more rows than Excel allows stops the export with a
-'     message instead of being cut short.
+'   - EN's Raw Transactions and Non Alerted Transaction carry on onto
+'     "(2)", "(3)"... sheets when they have more rows than one sheet holds.
+'     EN's Lookback, when it does, is saved as Legacy saves it - parts of
+'     RAW_ROWS_PER_SHEET rows and a Lookback Pivots file built from their
+'     totals (EnLookbackParts). Alerted Transaction, which its pivot needs
+'     on one sheet, stops the export with a message instead of being cut
+'     short.
 ' ==========================================================
 
 ' Shown on the status bar and in the Resume prompt, so it's clear which copy
 ' of this module is running (an imported module only sticks once the tool
 ' itself is saved).
-Private Const MODULE_VERSION As String = "2026-11-05b"
+Private Const MODULE_VERSION As String = "2026-11-24a"
 
 ' Legacy's Scenario pivot lists every Alert / Dr Cr / Counterparty
 ' combination. Past this many, it leaves Counterparty out: a pivot with
@@ -200,6 +203,9 @@ Private m_fields() As String
 ' so Consolidated_AML_Workflow_Large_Resume can finish the export).
 Private m_tempFolder As String
 Private m_keepTemp As Boolean
+' EN's Lookback parts are made here, then moved to the case folder
+' (EnLookbackParts); "" when there is none.
+Private m_enStageDir As String
 
 ' Pass 1's state, shared by the .xlsx and .csv readers - see LegacyExport
 ' and SetMasterColumns: the first file's header and the columns found in
@@ -494,6 +500,7 @@ If exportMode = "EN" Then
     Dim firstAlerted As Date, lastAlerted As Date
     Dim lbStart As Date, lbEnd As Date, winStartEN As Date, winEndEN As Date
     Dim lbSavedPath As String, nonCount As Long, rEN As Long
+    Dim lbM As String, lbRangeText As String, lbRows As Double, lbLine As String, nonSh As Worksheet
 
     If Len(colFlag) = 0 Then
         MsgBox "EN Network export needs an 'Is Alerted Transaction?' column (exact name), but it wasn't found in the data.", vbCritical, "Column Not Found"
@@ -532,43 +539,54 @@ If exportMode = "EN" Then
     ' Lookback Transactions file
     ' ---------------------------------------------------------------
     SetStage "loading the Lookback transactions"
+    lbM = BuildFilterM("TrxClean", "", "", colDate, True, lbStart, lbEnd)
+    lbRangeText = "(" & Format$(lbStart, "mm.dd.yyyy") & " to " & Format$(lbEnd, "mm.dd.yyyy") & ")"
     Set lbWb = NewOutputWorkbook()
     Set wsLB = lbWb.Sheets(1)
     wsLB.Name = "Lookback Transactions"
     lbWb.Queries.Add Name:="TrxBase", Formula:=baseM
     lbWb.Queries.Add Name:="TrxClean", Formula:=cleanM
-    lbWb.Queries.Add Name:="TrxLookback", Formula:=BuildFilterM("TrxClean", "", "", colDate, True, lbStart, lbEnd)
-    LoadQueryToSheet wsLB, "TrxLookback"
+    lbWb.Queries.Add Name:="TrxLookback", Formula:=lbM
+    ' The first RAW_ROWS_PER_SHEET rows. Fewer than that is the whole
+    ' Lookback, on one sheet: EN's own Lookback file. A full load means
+    ' there is more than one sheet should hold: parts, as Legacy saves them.
+    lbWb.Queries.Add Name:="TrxLookback_Part1", Formula:=BuildRowRangeM("TrxLookback", 0, RAW_ROWS_PER_SHEET)
+    lbRows = LoadQueryToSheet(wsLB, "TrxLookback_Part1")
     RemoveAllQueries lbWb
     FormatDataColumns wsLB, colDate, "dddd, mmmm d, yyyy", colAmt
 
-    SetStage "formatting the Lookback sheet"
-    TidyDataSheet wsLB
+    If lbRows >= RAW_ROWS_PER_SHEET Then
+        lbLine = EnLookbackParts(lbWb, baseM, cleanM, lbM, colDate, colAmt, colCp, _
+            saveFolderPath & slash & ecmID & "_" & AlertID & "_", lbRangeText, lbRows)
+    Else
+        SetStage "formatting the Lookback sheet"
+        TidyDataSheet wsLB
 
-    SetStage "building the Lookback pivots"
-    BuildEnPivots lbWb, "Lookback Transactions", "Pivot", "Lookback Transactions"
+        SetStage "building the Lookback pivots"
+        BuildEnPivots lbWb, "Lookback Transactions", "Pivot", "Lookback Transactions"
 
-    For rEN = lbWb.Sheets.count To 1 Step -1
-        Select Case lbWb.Sheets(rEN).Name
-            Case "Lookback Transactions", "Pivot"
-                ' keep
-            Case Else
-                SafeDeleteSheet lbWb, lbWb.Sheets(rEN).Name
-        End Select
-    Next rEN
+        For rEN = lbWb.Sheets.count To 1 Step -1
+            Select Case lbWb.Sheets(rEN).Name
+                Case "Lookback Transactions", "Pivot"
+                    ' keep
+                Case Else
+                    SafeDeleteSheet lbWb, lbWb.Sheets(rEN).Name
+            End Select
+        Next rEN
 
-    excelFileName = ecmID & "_" & AlertID & "_Lookback Transactions (" & _
-        Format$(lbStart, "mm.dd.yyyy") & " to " & Format$(lbEnd, "mm.dd.yyyy") & ").xlsx"
-    finalSavePath = saveFolderPath & slash & excelFileName
-    SetStage "saving the Lookback file"
-    CloseIfAlreadyOpen finalSavePath
-    MoveExistingExportAside finalSavePath
-    SetSheetZoom85 lbWb, Array("Lookback Transactions", "Pivot")
-    Application.DisplayAlerts = False
-    lbWb.SaveAs fileName:=finalSavePath, FileFormat:=51
-    MarkSaved lbWb
-    DiscardPreviousExport finalSavePath
-    lbSavedPath = finalSavePath
+        excelFileName = ecmID & "_" & AlertID & "_Lookback Transactions " & lbRangeText & ".xlsx"
+        finalSavePath = saveFolderPath & slash & excelFileName
+        SetStage "saving the Lookback file"
+        CloseIfAlreadyOpen finalSavePath
+        MoveExistingExportAside finalSavePath
+        SetSheetZoom85 lbWb, Array("Lookback Transactions", "Pivot")
+        Application.DisplayAlerts = False
+        lbWb.SaveAs fileName:=finalSavePath, FileFormat:=51
+        MarkSaved lbWb
+        DiscardPreviousExport finalSavePath
+        lbSavedPath = finalSavePath
+        lbLine = "Lookback Transactions:" & vbCrLf & lbSavedPath
+    End If
 
     ' ---------------------------------------------------------------
     ' Alerted / Non-Alerted Trx File
@@ -578,7 +596,7 @@ If exportMode = "EN" Then
 
     SetStage "loading the non-alerted transactions"
     newWb.Queries.Add Name:="TrxNonAlerted", Formula:=BuildFilterM("TrxClean", colFlag, "No", colDate, True, winStartEN, winEndEN)
-    nonCount = LoadQueryToSheet(wsNonEN, "TrxNonAlerted")
+    nonCount = LoadQueryAcrossSheets(newWb, wsNonEN, "TrxNonAlerted")
     RemoveAllQueries newWb
 
     If nonCount = 0 Then
@@ -589,7 +607,8 @@ If exportMode = "EN" Then
 
     SetStage "formatting the Combined sheets"
     For Each ws In newWb.Worksheets
-        If IsSheetPart(ws.Name, "Raw Transactions") Or ws.Name = "Alerted Transaction" Or ws.Name = "Non Alerted Transaction" Then
+        If IsSheetPart(ws.Name, "Raw Transactions") Or ws.Name = "Alerted Transaction" Or _
+           IsSheetPart(ws.Name, "Non Alerted Transaction") Then
             FormatDataColumns ws, colDate, "m/d/yyyy", colAmt
             TidyDataSheet ws
         End If
@@ -603,11 +622,22 @@ If exportMode = "EN" Then
             Case "Raw Transactions", "Alerted Transaction", "Alerted Transaction Pivot", "Non Alerted Transaction"
                 ' keep
             Case Else
-                If Not IsSheetPart(newWb.Sheets(rEN).Name, "Raw Transactions") Then SafeDeleteSheet newWb, newWb.Sheets(rEN).Name
+                If Not IsSheetPart(newWb.Sheets(rEN).Name, "Raw Transactions") And _
+                   Not IsSheetPart(newWb.Sheets(rEN).Name, "Non Alerted Transaction") Then
+                    SafeDeleteSheet newWb, newWb.Sheets(rEN).Name
+                End If
         End Select
     Next rEN
 
-    newWb.Sheets("Non Alerted Transaction").Move After:=newWb.Sheets(newWb.Sheets.count)
+    ' Non Alerted Transaction last - every one of its sheets, in order.
+    For rEN = 1 To 99
+        Set nonSh = Nothing
+        On Error Resume Next
+        Set nonSh = newWb.Sheets(IIf(rEN = 1, "Non Alerted Transaction", "Non Alerted Transaction (" & rEN & ")"))
+        On Error GoTo CancelHandler
+        If nonSh Is Nothing Then Exit For
+        nonSh.Move After:=newWb.Sheets(newWb.Sheets.count)
+    Next rEN
 
     excelFileName = ecmID & "_" & AlertID & "_Combined Alerted & Non Alerted Transactions.xlsx"
     finalSavePath = saveFolderPath & slash & excelFileName
@@ -631,8 +661,8 @@ If exportMode = "EN" Then
     newWb.Sheets("Raw Transactions").Activate
     FinishRun origCalc
 
-    MsgBox "EN Network export complete! Both files were generated:" & vbCrLf & vbCrLf & _
-        "Lookback Transactions:" & vbCrLf & lbSavedPath & vbCrLf & vbCrLf & _
+    MsgBox "EN Network export complete!" & vbCrLf & vbCrLf & _
+        lbLine & vbCrLf & vbCrLf & _
         "Alerted / Non-Alerted Transactions:" & vbCrLf & finalSavePath, vbInformation, "Success"
     Exit Sub
 End If
@@ -655,6 +685,7 @@ CloseCsvHandle
 ' Once the source files are all read their rows are kept, for the Resume
 ' macro; before that there is nothing worth keeping.
 If Not m_keepTemp Then RemoveTempFolder
+RemoveEnStage               ' EN's Lookback parts not yet moved to the case folder
 Application.Calculation = origCalc
 Application.EnableCancelKey = xlInterrupt
 Application.ScreenUpdating = True
@@ -3440,6 +3471,113 @@ Private Function LookbackStartDate(ByVal firstAlerted As Date) As Date
     LookbackStartDate = DateAdd("yyyy", -1, DateSerial(Year(firstAlerted), Month(firstAlerted), Day(firstAlerted)))
 End Function
 
+' EN's Lookback when it needs more rows than one sheet holds, saved as Legacy
+' saves it: "<ECM>_<Alert>_Lookback Transactions (range) (part N).xlsb" of
+' RAW_ROWS_PER_SHEET rows each, and "Lookback Pivots (range).xlsx" built from
+' their totals (BuildTotalsPivotFile) - not EN's single file with its Pivot
+' sheet. part1Wb holds the first part's rows already (rows of them); each
+' further part runs the Lookback query again, skipping the rows before it.
+' The files are made in a folder under TEMP and moved into the case folder
+' at the end (MoveLookbackFiles), where they replace the case's earlier
+' Lookback parts and Lookback Pivots file. prefix: the case folder and
+' "<ECM>_<Alert>_". Returns the closing message's lines; rows comes back as
+' the Lookback's total.
+Private Function EnLookbackParts(ByVal part1Wb As Workbook, ByVal baseM As String, ByVal cleanM As String, _
+    ByVal lbM As String, ByVal colDate As String, ByVal colAmt As String, ByVal colCp As String, _
+    ByVal prefix As String, ByVal rangeText As String, ByRef rows As Double) As String
+    Dim staged As New Collection, wb As Workbook, ws As Worksheet, part As Long, n As Double
+    Dim stem As String, target As String, total As Double, cpLeftOut As Boolean, pivWb As Workbook
+    Dim pivPath As String, msg As String
+
+    m_enStageDir = Environ$("TEMP") & "\LargeExport_EN_" & Format$(Now, "yyyymmdd_hhnnss")
+    MkDir m_enStageDir
+    stem = m_enStageDir & "\" & Mid$(prefix, InStrRev(prefix, "\") + 1) & "Lookback Transactions " & rangeText
+    StartTotals
+
+    Set wb = part1Wb
+    n = rows
+    part = 1
+    Do
+        Set ws = wb.Worksheets(1)
+        SetStage "saving the Lookback transactions (part " & part & ")"
+        TidyDataSheet ws
+        AddPartToTotals ws, "part " & part, total, colCp
+        target = stem & " (part " & part & ")" & LIST_FILE_EXT
+        SetSheetZoom85 wb, Array(ws.Name)
+        Application.DisplayAlerts = False
+        wb.SaveAs fileName:=target, FileFormat:=LIST_FILE_FORMAT
+        MarkSaved wb
+        wb.Close SaveChanges:=False
+        Set wb = Nothing
+        staged.Add target
+        If n < RAW_ROWS_PER_SHEET Then Exit Do
+
+        ' The next RAW_ROWS_PER_SHEET rows.
+        part = part + 1
+        SetStage "loading the Lookback transactions (part " & part & ")"
+        Set wb = NewOutputWorkbook()
+        Set ws = wb.Worksheets(1)
+        ws.Name = "Lookback Transactions"
+        wb.Queries.Add Name:="TrxBase", Formula:=baseM
+        wb.Queries.Add Name:="TrxClean", Formula:=cleanM
+        wb.Queries.Add Name:="TrxLookback", Formula:=lbM
+        wb.Queries.Add Name:="TrxLookback_Part" & part, _
+            Formula:=BuildRowRangeM("TrxLookback", (part - 1) * RAW_ROWS_PER_SHEET, RAW_ROWS_PER_SHEET)
+        n = LoadQueryToSheet(ws, "TrxLookback_Part" & part)
+        RemoveAllQueries wb
+        If n = 0 Then
+            ' The rows came to an exact multiple of the part size: no more.
+            MarkSaved wb
+            wb.Close SaveChanges:=False
+            Set wb = Nothing
+            part = part - 1
+            Exit Do
+        End If
+        FormatDataColumns ws, colDate, "dddd, mmmm d, yyyy", colAmt
+    Loop
+    rows = total
+
+    SetStage "building the Lookback pivots"
+    Set pivWb = BuildTotalsPivotFile("Lookback", cpLeftOut)
+    pivPath = m_enStageDir & "\" & Mid$(prefix, InStrRev(prefix, "\") + 1) & "Lookback Pivots " & rangeText & ".xlsx"
+    ZoomAllSheets pivWb
+    pivWb.Sheets("Pivot").Activate
+    Application.DisplayAlerts = False
+    pivWb.SaveAs fileName:=pivPath, FileFormat:=51
+    MarkSaved pivWb
+    pivWb.Close SaveChanges:=False
+    staged.Add pivPath
+
+    SetStage "moving the Lookback files into the case folder"
+    MoveLookbackFiles staged, prefix
+    RemoveEnStage
+
+    msg = "Lookback Transactions - " & Format$(total, "#,##0") & " rows, more than one sheet holds, so saved " & _
+        "as Legacy saves it, in " & Left$(prefix, InStrRev(prefix, "\") - 1) & ":" & vbCrLf & _
+        "   " & FileNameOf(stem) & " (part 1) to (part " & part & ")" & LIST_FILE_EXT & vbCrLf & _
+        "   " & FileNameOf(pivPath) & " (its pivots)"
+    If cpLeftOut Then
+        msg = msg & vbCrLf & "   (too many combinations for its Scenario pivot: the counterparty breakdown " & _
+            "is on its Scenario Totals sheet)"
+    End If
+    EnLookbackParts = msg & vbCrLf & "   Earlier Lookback parts and Lookback Pivots files of this case were replaced."
+End Function
+
+' Empty totals, and the Daily memo AddDailyFast reads, before adding up parts.
+Private Sub StartTotals()
+    ResetTotals
+    ReDim m_dayMemo(0 To 1, 0 To LOOKBACK_MEMO_DAYS - 1)
+    m_memoSide(0) = "": m_memoSide(1) = "": m_memoSides = 0
+End Sub
+
+' EN's folder for Lookback parts gone - once they are moved, or when the
+' export stops.
+Private Sub RemoveEnStage()
+    On Error Resume Next
+    If Len(m_enStageDir) > 0 Then CreateObject("Scripting.FileSystemObject").DeleteFolder m_enStageDir, True
+    m_enStageDir = ""
+End Sub
+
 ' Moves the Lookback files into the case folder. Their names hold their
 ' dates, so a run with a different window wouldn't replace an earlier run's
 ' by name: this module's earlier Lookback files go first, whatever their
@@ -3623,9 +3761,7 @@ Private Sub LookbackFromFiles(ByVal fixStart As Boolean)
     Application.DisplayAlerts = False
 
     t0 = Timer
-    ResetTotals
-    ReDim m_dayMemo(0 To 1, 0 To LOOKBACK_MEMO_DAYS - 1)
-    m_memoSide(0) = "": m_memoSide(1) = "": m_memoSides = 0
+    StartTotals
     If fixStart Then
         MkDir outFolder
         madeFolder = True
@@ -3853,11 +3989,14 @@ End Function
 
 ' One finished Lookback part's rows into the totals. The whole sheet is
 ' open, but only these columns are read. rowsRead gets its row count added.
-Private Sub AddPartToTotals(ByVal ws As Worksheet, ByVal progress As String, ByRef rowsRead As Double)
+' cpName: the last column's name when it is the counterparty (EN names it
+' "Counterparty (calculated)" when the files have a Counterparty column).
+Private Sub AddPartToTotals(ByVal ws As Worksheet, ByVal progress As String, ByRef rowsRead As Double, _
+    Optional ByVal cpName As String = "Counterparty")
     Dim n As Long, r As Long
     Dim alertV As Variant, drV As Variant, cpV As Variant, amtV As Variant, dateV As Variant
 
-    ReadPartHeader ws
+    ReadPartHeader ws, cpName
     n = PartRows(ws)
     If n < 1 Then Exit Sub
 
@@ -3879,7 +4018,7 @@ Private Sub AddPartToTotals(ByVal ws As Worksheet, ByVal progress As String, ByR
 End Sub
 
 ' A finished part's header row into m_headerNames, and the columns found in it.
-Private Sub ReadPartHeader(ByVal ws As Worksheet)
+Private Sub ReadPartHeader(ByVal ws As Worksheet, Optional ByVal cpName As String = "Counterparty")
     Dim lastC As Long, j As Long, hdr As Variant, dateName As String, amtName As String
 
     lastC = ws.Cells(1, ws.Columns.count).End(xlToLeft).Column
@@ -3894,7 +4033,7 @@ Private Sub ReadPartHeader(ByVal ws As Worksheet)
     Next j
     m_dateCol = FindHeaderIndex(m_headerNames, "Transaction Date", False)
     m_cpTextCol = 0
-    If m_headerNames(lastC) = "Counterparty" Then m_cpTextCol = lastC
+    If m_headerNames(lastC) = cpName Then m_cpTextCol = lastC
     ReadTotalColumns dateName, amtName
     If m_dateCol = 0 Or m_iAmt = 0 Then
         Err.Raise vbObjectError + 1012, "modLargeExport", ws.Parent.Name & " has no Transaction Date or Transaction Amount column."
