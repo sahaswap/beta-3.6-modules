@@ -64,6 +64,7 @@ Private Declare PtrSafe Function GetWindowText Lib "user32" Alias "GetWindowText
 (ByVal hwnd As LongPtr, ByVal lpString As String, ByVal cch As Long) As Long
 ' The clipboard's text, read and put back, for Sheet1's Ctrl+V (OsddPaste).
 Private Declare PtrSafe Function IsClipboardFormatAvailable Lib "user32" (ByVal wFormat As Long) As Long
+Private Declare PtrSafe Function GetClipboardSequenceNumber Lib "user32" () As Long
 Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
 Private Declare PtrSafe Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
 Private Declare PtrSafe Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
@@ -108,6 +109,7 @@ Private Declare Function IsWindowVisible Lib "user32" (ByVal hwnd As Long) As Lo
 Private Declare Function GetWindowText Lib "user32" Alias "GetWindowTextA" _
 (ByVal hwnd As Long, ByVal lpString As String, ByVal cch As Long) As Long
 Private Declare Function IsClipboardFormatAvailable Lib "user32" (ByVal wFormat As Long) As Long
+Private Declare Function GetClipboardSequenceNumber Lib "user32" () As Long
 Private Declare Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As Long
 Private Declare Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As Long) As Long
 Private Declare Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As Long) As Long
@@ -441,6 +443,11 @@ Private m_lastHumanSolve As Date
 ' whether an import is running.
 Private mEcmNextTick As Date
 Private mEcmBusy As Boolean
+' The clipboard as last looked at (its sequence number), the case last
+' imported from the floater ("ECM|sent at"), and whether one is being imported.
+Private mEcmClipSeq As Long
+Private mEcmLastAuto As String
+Private mEcmAutoImporting As Boolean
 
 ' Entry point. Wire this up to your macro button.
 Sub SearchAndSavePDF_Direct()
@@ -4042,6 +4049,7 @@ End Sub
 ' (ThisWorkbook's Workbook_Open) and by modSheet1Setup.
 Public Sub FitSheet1ToWindow()
     Dim ws As Worksheet, keep As String, wasProt As Boolean
+    EcmWatchStart                     ' the ECM import watcher, as the workbook opens
     On Error GoTo Done
     Set ws = ThisWorkbook.Sheets("Sheet1")
     ThisWorkbook.Activate
@@ -4318,6 +4326,17 @@ Private Sub FillCaseFromPayload(ByVal txt As String)
         Exit Sub
     End If
 
+    ' A case the watcher already took in (the floater sends it as a file and on
+    ' the clipboard) is not imported again by a Ctrl+V without asking.
+    If hasTrx And Not mEcmAutoImporting Then
+        If EcmPayloadId(txt) <> "" And EcmPayloadId(txt) = mEcmLastAuto Then
+            If TopMostMsgBox("Case " & ecm & " was imported from the ECM panel already. Import it again?", _
+                "Fill from ECM", MB_YESNO Or MB_ICONQUESTION) <> IDYES Then Exit Sub
+        End If
+        mEcmLastAuto = EcmPayloadId(txt)
+        EcmClipboardTaken mEcmLastAuto
+    End If
+
     Application.EnableEvents = True
     ws.Activate
     cur = Trim$(CellStr(ws.Range("J9").Value))
@@ -4433,12 +4452,15 @@ End Sub
 ' ECM IMPORT WATCHER
 '
 ' The floater's "Import to tool" saves the case to Downloads as
-' <ECM>_AMLTOOL.txt, after the transaction file. While the tool is open it
-' looks in Downloads every 5 seconds; a case file found there is taken
-' (renamed first, so a second open copy of the tool can't take it too), read,
-' deleted, and imported - FillCaseFromPayload, then EcmFullCase - with no
-' Ctrl+V. Started when the workbook opens (Auto_Open) and by Ctrl+V, stopped
-' when it closes (Auto_Close); Alt+F8 > EcmWatchStart / EcmWatchStop by hand.
+' <ECM>_AMLTOOL.txt, after the transaction file, and puts it on the clipboard
+' too (marked auto=1). While the tool is open it looks every 5 seconds: a case
+' file in Downloads is taken (renamed first, so a second open copy of the tool
+' can't take it too), read and deleted; failing that, a case on the clipboard
+' sent in the last 30 minutes is read. Either way the case is imported once -
+' the tool comes to the front, FillCaseFromPayload, then EcmFullCase - with no
+' Ctrl+V. Started when the workbook opens (Workbook_Open's FitSheet1ToWindow,
+' Auto_Open) and by Ctrl+V, stopped when it closes (Auto_Close); Alt+F8 >
+' EcmWatchStart / EcmWatchStop by hand.
 '==================================================================
 Public Sub Auto_Open()
     EcmWatchStart
@@ -4474,11 +4496,117 @@ Public Sub EcmWatchTick()
         If f <> "" Then
             mEcmBusy = True
             EcmImportCaseFile f
+        Else
+            f = EcmClipboardCase()
+            If f <> "" Then
+                mEcmBusy = True
+                EcmImportPayload f
+            End If
         End If
     End If
 Done:
     mEcmBusy = False
     EcmWatchStart
+End Sub
+
+' A case the floater's Import to tool put on the clipboard - marked auto=1,
+' sent in the last 30 minutes, not imported yet - looked at only when the
+' clipboard has changed and the copy isn't Excel's own. "" when there is none.
+Private Function EcmClipboardCase() As String
+    Dim seq As Long, txt As String, id As String, sent As Date
+    On Error Resume Next
+    seq = GetClipboardSequenceNumber()
+    If seq = mEcmClipSeq Then Exit Function
+    mEcmClipSeq = seq
+    If Application.CutCopyMode <> False Then Exit Function
+    If IsClipboardFormatAvailable(13) = 0 Then Exit Function
+    txt = Trim$(Replace(Replace(ClipboardText(), vbCr, ""), vbLf, ""))
+    If Not IsCasePayload(txt) Then Exit Function
+    If InStr(1, txt, ChrW(166) & "auto=1", vbBinaryCompare) = 0 Then Exit Function
+    id = EcmPayloadId(txt)
+    If id = "" Or id = mEcmLastAuto Then Exit Function
+    sent = EcmStamp(Mid$(id, InStr(id, "|") + 1))
+    If sent < Now - TimeSerial(0, 30, 0) Then Exit Function
+    EcmClipboardCase = txt
+End Function
+
+' "ECM|sent at" of a case from the floater (its ecm= and trxat=), or "".
+Private Function EcmPayloadId(ByVal txt As String) As String
+    Dim parts() As String, i As Long, ecm As String, sentAt As String
+    parts = Split(txt, ChrW(166))
+    For i = 1 To UBound(parts)
+        If LCase$(Left$(parts(i), 4)) = "ecm=" Then ecm = Trim$(Mid$(parts(i), 5))
+        If LCase$(Left$(parts(i), 6)) = "trxat=" Then sentAt = Trim$(Mid$(parts(i), 7))
+    Next i
+    If ecm <> "" And sentAt <> "" Then EcmPayloadId = ecm & "|" & sentAt
+End Function
+
+' Imports a case from the floater with the tool in front - once: the same case
+' sent at the same time (from its file and the clipboard) is imported once.
+Private Sub EcmImportPayload(ByVal txt As String)
+    Dim id As String, ecm As String
+    id = EcmPayloadId(txt)
+    If id <> "" And id = mEcmLastAuto Then Exit Sub
+    mEcmLastAuto = id
+    EcmClipboardTaken id
+    On Error Resume Next
+    ForceForeground Application.hwnd
+    AppActivate Application.caption
+    On Error GoTo 0
+    ThisWorkbook.Activate
+    ' The same case already on Sheet1 (worked on since?) is not filled again unasked.
+    If id <> "" Then ecm = Left$(id, InStr(id, "|") - 1)
+    If ecm <> "" And Trim$(CellStr(ThisWorkbook.Sheets("Sheet1").Range("J9").Value)) = ecm Then
+        If TopMostMsgBox("Case " & ecm & " is on Sheet1 already. Import it again from the ECM panel - fill Sheet1 " & _
+            "again and export again?", "Import from ECM", MB_YESNO Or MB_ICONQUESTION) <> IDYES Then Exit Sub
+    End If
+    mEcmAutoImporting = True
+    FillCaseFromPayload txt
+    mEcmAutoImporting = False
+End Sub
+
+' A case taken in stays on the clipboard for Ctrl+V, but without its auto=1
+' mark, so the watcher never takes it in again (not even after Excel restarts).
+Private Sub EcmClipboardTaken(ByVal id As String)
+    Dim cur As String
+    On Error Resume Next
+    If id = "" Then Exit Sub
+    If Application.CutCopyMode <> False Then Exit Sub
+    cur = ClipboardText()
+    If InStr(1, cur, ChrW(166) & "auto=1", vbBinaryCompare) = 0 Then Exit Sub
+    If EcmPayloadId(Trim$(Replace(Replace(cur, vbCr, ""), vbLf, ""))) <> id Then Exit Sub
+    PutClipboardText Replace(cur, ChrW(166) & "auto=1", "")
+    mEcmClipSeq = GetClipboardSequenceNumber()
+End Sub
+
+' Alt+F8: whether the ECM import watcher is running (it is started if not), the
+' Downloads folder it looks in, and the floater's case files there.
+Public Sub EcmWatchStatus()
+    Dim dl As String, f As String, files As String, pat As Variant, msg As String, wasOn As Boolean
+    wasOn = (mEcmNextTick > Now - TimeSerial(0, 0, 1))
+    EcmWatchStart
+    dl = EcmDownloadsFolder()
+    For Each pat In Array("*_AMLTOOL*.txt", "*_AMLTOOL*.taken", "*_AMLTOOL*.failed")
+        f = Dir$(dl & "\" & pat)
+        Do While f <> ""
+            files = files & vbCrLf & "   " & f & "  (" & Format$(FileDateTime(dl & "\" & f), "dd mmm hh:nn:ss") & ")"
+            f = Dir$()
+        Loop
+    Next pat
+    If wasOn Then
+        msg = "The ECM import watcher is running: next look at " & Format$(mEcmNextTick, "hh:nn:ss") & "."
+    Else
+        msg = "The ECM import watcher was NOT running - it is started now. (It starts by itself when the tool " & _
+            "opens; if it keeps stopping, tell whoever looks after the tool.)"
+    End If
+    msg = msg & vbCrLf & vbCrLf & "It looks in: " & dl & vbCrLf & "and at the clipboard." & vbCrLf & vbCrLf & _
+        "Case files from the ECM panel there:" & IIf(files = "", vbCrLf & "   none", files) & vbCrLf & vbCrLf & _
+        "Last case taken in: " & IIf(mEcmLastAuto = "", "none since the tool opened", Replace(mEcmLastAuto, "|", " (sent ") & _
+        IIf(mEcmLastAuto = "", "", ")")) & vbCrLf & vbCrLf & _
+        "A case file waiting there for more than a few seconds while the watcher runs: the case is older than " & _
+        "30 minutes, or the browser saves downloads to another folder. No case file at all: the browser held " & _
+        "back the second download (let the site download multiple files) - the clipboard still carries it."
+    TopMostMsgBox msg, "ECM import watcher", MB_ICONINFO
 End Sub
 
 ' The oldest <ECM>_AMLTOOL.txt in Downloads saved in the last 30 minutes (an
@@ -4512,11 +4640,7 @@ Private Sub EcmImportCaseFile(ByVal path As String)
     On Error GoTo Failed
     txt = Trim$(Replace(Replace(EcmReadUtf8(path), vbCr, ""), vbLf, ""))
     If Not IsCasePayload(txt) Then Err.Raise 5, , "the file is not a case from the ECM panel"
-    On Error Resume Next
-    AppActivate Application.caption
-    On Error GoTo Failed
-    ThisWorkbook.Activate
-    FillCaseFromPayload txt
+    EcmImportPayload txt
     On Error Resume Next
     Kill path
     Exit Sub
@@ -4524,6 +4648,7 @@ Private Sub EcmImportCaseFile(ByVal path As String)
 Failed:
     errNo = Err.Number
     errText = Err.Description
+    mEcmAutoImporting = False
     Resume Report                     ' out of the error, so the lines below run whatever happens
 Report:
     On Error Resume Next
@@ -4621,7 +4746,7 @@ Private Sub EcmFullCase(ByVal ws As Worksheet, ByVal ecm As String, ByVal alertI
     Else
         steps = steps & vbCrLf & "Exported (EN Network): " & made
         If EcmCdSignature() <> sig Or EcmCdHasAlert(alertId) Then
-            fillNote = EcmFillFromTransactions(ws)
+            fillNote = EcmFillFromTransactions(ws, EcmNonAlertedRows(caseDir))
         Else
             fillNote = "Counterparties and addresses not filled - this export did not refresh ConsolidatedData " & _
                 "(Pivot Analysis leaves it as it was)."
@@ -4960,39 +5085,47 @@ Private Function EcmCdHasAlert(ByVal alertId As String) As Boolean
     Next r
 End Function
 
-' Sheet1 from the exported transactions (ConsolidatedData); only blank cells
-' are filled. Only the alerted rows ("Is Alerted Transaction?" = Yes) count
-' when the data says which.
-'   Counterparties J18:J22, when all five are blank - the counterparty
-'   sampling rule: for each alert rule ("Alert Information") the
-'   counterparty with the highest total amount (debit and credit added),
-'   rules in order of that amount, one each, at most 5; fewer than 3 is
-'   topped up with the highest amounts left. Names that differ only in
-'   reference codes (words with a digit), punctuation or spaces count as one
-'   merchant, written as the merchant part ("AIRBNB * HMKNMMCRE9" -> AIRBNB), and
+' Sheet1 from the exported transactions. The alerted rows are ConsolidatedData's
+' ("Is Alerted Transaction?" = Yes when the data says which); the non-alerted
+' rows are its "No" rows and the EN export's Non Alerted Transaction sheet
+' (naData, an array with its header row, or Empty).
+'   Counterparties - the sampling rule: for each alert rule ("Alert
+'   Information") the counterparty with the highest total amount (debit and
+'   credit added), one each, at most 5; fewer than 3 is topped up with the
+'   highest alerted amounts left, and when the alerted rows have no more
+'   counterparties, with the non-alerted counterparties of the highest dollar
+'   value. The picks are sorted by dollar value. Names that differ only in
+'   reference codes count as one merchant, written as the merchant part, and
 '   spellings of one name - AMAZON, AMAZ, AMZN, AMZON - are one counterparty
-'   (EcmSimilarKey): their amounts are added and the biggest spelling is written.
-'   Each counterparty's addresses, whoever chose the name: its side of its
-'   rows - DR: Beneficiary, CR: Originator, the rule the export's
-'   Counterparty column uses - the most frequent in T, others in X:Z.
+'   (EcmSimilarKey): amounts added, the biggest spelling written.
+'   J18:J22 empty: the picks are written. Fewer than 3 names on Sheet1 (the
+'   floater found fewer in the alerted list): topped up to 3 from the picks
+'   and the rows sorted by dollar value, each name's other cells moving with
+'   it. 3 or more: kept, with a line for any pick Sheet1 doesn't have.
+'   Each counterparty's addresses: its side of its rows - DR: Beneficiary,
+'   CR: Originator, the rule the export's Counterparty column uses - alerted
+'   rows first, else non-alerted: the most frequent in T, others in X:Z.
 '   The customer's other addresses (X14:Z14): the customer's side of the
-'   rows - DR: Originator, CR: Beneficiary - that differ from J14.
-' An address that is only a country, or the same as one already there (case,
-' punctuation, a country at the end, a missing zip or unit ignored), is
-' left out. Returns what was filled.
-Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
+'   alerted rows - DR: Originator, CR: Beneficiary - that differ from J14.
+' Address cells are filled only when blank; an address that is only a
+' country, or the same as one already there (case, punctuation, a country
+' at the end, a missing zip or unit ignored), is left out. Returns what was
+' filled.
+Private Function EcmFillFromTransactions(ByVal ws As Worksheet, ByVal naData As Variant) As String
     Const MAX_PICKS As Long = 5
     Const MIN_PICKS As Long = 3
-    Dim cd As Worksheet, data As Variant, nR As Long, nC As Long, r As Long, i As Long
-    Dim cRule As Long, cCp As Long, cAmt As Long, cDir As Long, cAl As Long
-    Dim cBenN As Long, cBenA As Long, cBenC As Long, cOrgN As Long, cOrgA As Long, cOrgC As Long
-    Dim useRow() As Boolean, rCp() As String, rKey() As String, rRule() As String, rAmt() As Double
-    Dim rCpAddr() As String, rCustAddr() As String, anyYes As Boolean, isDr As Boolean
-    Dim pairVal As Object, varVal As Object, shown As Object, bestVar As Object, total As Object
-    Dim blank As Object, ruleDone As Object, picked As Object, k As Variant, parts() As String
-    Dim pickKey(1 To MAX_PICKS) As String, pickWhy(1 To MAX_PICKS) As String, nPick As Long
-    Dim hadNames As Boolean, bestK As String, bestV As Double, note As String, nm As String, wrote As String
-    Dim grp As Object, j As Long, onSheet As Boolean, missed As String
+    Dim cd As Worksheet, data As Variant, nR As Long, nC As Long, r As Long, i As Long, j As Long, t As Long
+    Dim cols As Variant, nT As Long, naR As Long, cAl As Long, anyYes As Boolean, flag As String
+    Dim rKind() As Long, isAl() As Boolean, isNa() As Boolean, inAny() As Boolean
+    Dim rCp() As String, rKey() As String, rRule() As String, rAmt() As Double, rCpAddr() As String, rCustAddr() As String
+    Dim pairVal As Object, varVal As Object, naVar As Object, total As Object, naTot As Object, blank As Object
+    Dim shown As Object, naShown As Object, ruleDone As Object, picked As Object, grp As Object
+    Dim k As Variant, parts() As String, bestK As String, bestV As Double, tmpS As String, tmpD As Double, tmpL As Long
+    Dim pickKey(1 To MAX_PICKS) As String, pickWhy(1 To MAX_PICKS) As String, pickName(1 To MAX_PICKS) As String
+    Dim pickVal(1 To MAX_PICKS) As Double, pickSrc(1 To MAX_PICKS) As Long, nPick As Long
+    Dim eName(1 To 10) As String, eVal(1 To 10) As Double, eWhy(1 To 10) As String, eRow(1 To 10) As Long, nE As Long
+    Dim note As String, nm As String, wrote As String, gk As String, nHave As Long, onSheet As Boolean, missed As String
+    Dim addrs As Collection
 
     On Error GoTo Failed
     Set cd = ThisWorkbook.Sheets("ConsolidatedData")
@@ -5003,96 +5136,91 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
         Exit Function
     End If
     data = cd.Range(cd.Cells(1, 1), cd.Cells(nR, nC)).Value
-    cRule = EcmCol(data, nC, "Alert Information")
-    cCp = EcmCol(data, nC, "Counterparty")
-    cAmt = EcmCol(data, nC, "Transaction Amount")
-    cDir = EcmCol(data, nC, "Dr Cr")
-    cAl = EcmCol(data, nC, "Is Alerted Transaction")
-    cBenN = EcmCol(data, nC, "Beneficiary Name")
-    cBenA = EcmCol(data, nC, "Beneficiary Address")
-    cBenC = EcmCol(data, nC, "Beneficiary Country")
-    cOrgN = EcmCol(data, nC, "Originator Name")
-    cOrgA = EcmCol(data, nC, "Originator Address")
-    cOrgC = EcmCol(data, nC, "Originator Country")
-    If cCp = 0 And (cBenN = 0 Or cOrgN = 0) Then
+    cols = EcmCols(data)
+    If cols(1) = 0 And (cols(5) = 0 Or cols(8) = 0) Then
         EcmFillFromTransactions = "Counterparties and addresses not filled - ConsolidatedData has no Counterparty " & _
             "(or Beneficiary / Originator Name) column."
         Exit Function
     End If
+    If IsArray(naData) Then naR = UBound(naData, 1)
 
-    ' Each row once: whether it counts, its counterparty and rule, its amount,
-    ' and the addresses on each side.
-    ReDim useRow(2 To nR): ReDim rCp(2 To nR): ReDim rKey(2 To nR): ReDim rRule(2 To nR)
-    ReDim rAmt(2 To nR): ReDim rCpAddr(2 To nR): ReDim rCustAddr(2 To nR)
+    ' Each row once - ConsolidatedData's, then the Non Alerted sheet's: its kind
+    ' (1 alerted, 2 non-alerted, 0 neither), counterparty, rule, amount and the
+    ' addresses on each side.
+    nT = nR - 1
+    If naR >= 2 Then nT = nT + naR - 1
+    ReDim rKind(1 To nT): ReDim rCp(1 To nT): ReDim rKey(1 To nT): ReDim rRule(1 To nT)
+    ReDim rAmt(1 To nT): ReDim rCpAddr(1 To nT): ReDim rCustAddr(1 To nT)
+    ReDim isAl(1 To nT): ReDim isNa(1 To nT): ReDim inAny(1 To nT)
+    cAl = cols(4)
     If cAl > 0 Then
         For r = 2 To nR
             If StrComp(Trim$(CellStr(data(r, cAl))), "Yes", vbTextCompare) = 0 Then anyYes = True: Exit For
         Next r
     End If
     For r = 2 To nR
-        useRow(r) = True
-        If anyYes Then useRow(r) = (StrComp(Trim$(CellStr(data(r, cAl))), "Yes", vbTextCompare) = 0)
-        isDr = False
-        If cDir > 0 Then isDr = (UCase$(Trim$(CellStr(data(r, cDir)))) = "DR")
-        If cCp > 0 Then
-            rCp(r) = Trim$(CellStr(data(r, cCp)))
-        ElseIf isDr Then
-            rCp(r) = Trim$(CellStr(data(r, cBenN)))
-        Else
-            rCp(r) = Trim$(CellStr(data(r, cOrgN)))
-        End If
-        If rCp(r) <> "" Then rKey(r) = EcmMerchantKey(rCp(r))
-        If cRule > 0 Then rRule(r) = Trim$(CellStr(data(r, cRule)))
-        If rRule(r) = "" Then rRule(r) = "(no rule)"
-        If cAmt > 0 Then rAmt(r) = Abs(EcmNum(data(r, cAmt)))
-        If isDr Then
-            rCpAddr(r) = EcmAddress(data, r, cBenA, cBenC)
-            rCustAddr(r) = EcmAddress(data, r, cOrgA, cOrgC)
-        Else
-            rCpAddr(r) = EcmAddress(data, r, cOrgA, cOrgC)
-            rCustAddr(r) = EcmAddress(data, r, cBenA, cBenC)
-        End If
-    Next r
-
-    ' Spellings of one counterparty - AMAZON, AMAZ, AMAZO, AMZN, AMZON, AMAZON MKTPL -
-    ' count as one: each counting row carries its group's key (its biggest spelling's).
-    Set grp = EcmGroupKeys(useRow, rKey, rAmt, nR)
-    For r = 2 To nR
-        If useRow(r) And rKey(r) <> "" Then rKey(r) = grp(rKey(r))
-    Next r
-
-    For i = 18 To 22
-        If Trim$(CellStr(ws.Range("J" & i).Value)) <> "" Then hadNames = True
-    Next i
-    ' The sampling rule is worked out either way: it fills J18:J22 when they are
-    ' empty, and otherwise says which of its picks Sheet1 doesn't have.
-    ' Totals per (rule, merchant), per merchant, and per spelling.
-    Set pairVal = EcmDict(): Set varVal = EcmDict(): Set total = EcmDict(): Set blank = EcmDict()
-    For r = 2 To nR
-        If useRow(r) Then
-            If rKey(r) <> "" Then
-                k = rRule(r) & vbTab & rKey(r)
-                pairVal(k) = pairVal(k) + rAmt(r)
-                total(rKey(r)) = total(rKey(r)) + rAmt(r)
-                k = rKey(r) & vbTab & rCp(r)
-                varVal(k) = varVal(k) + rAmt(r)
-            ElseIf rAmt(r) <> 0 Then
-                blank(rRule(r)) = blank(rRule(r)) + rAmt(r)
+        t = t + 1
+        rKind(t) = 1
+        If anyYes Then
+            flag = Trim$(CellStr(data(r, cAl)))
+            If StrComp(flag, "Yes", vbTextCompare) = 0 Then
+                rKind(t) = 1
+            ElseIf StrComp(flag, "No", vbTextCompare) = 0 Then
+                rKind(t) = 2
+            Else
+                rKind(t) = 0
             End If
         End If
+        EcmRowInfo data, r, cols, rCp(t), rRule(t), rAmt(t), rCpAddr(t), rCustAddr(t)
     Next r
-    ' The name written for a merchant: the merchant part of its biggest spelling.
-    Set shown = EcmDict(): Set bestVar = EcmDict()
-    For Each k In varVal.Keys
-        parts = Split(k, vbTab)
-        If Not bestVar.Exists(parts(0)) Then bestVar(parts(0)) = -1
-        If varVal(k) > bestVar(parts(0)) Then
-            bestVar(parts(0)) = varVal(k)
-            shown(parts(0)) = EcmMerchantName(parts(1))
+    If naR >= 2 Then
+        cols = EcmCols(naData)
+        For r = 2 To naR
+            t = t + 1
+            rKind(t) = 2
+            EcmRowInfo naData, r, cols, rCp(t), rRule(t), rAmt(t), rCpAddr(t), rCustAddr(t)
+        Next r
+    End If
+    For t = 1 To nT
+        If rCp(t) <> "" Then rKey(t) = EcmMerchantKey(rCp(t))
+        isAl(t) = (rKind(t) = 1)
+        isNa(t) = (rKind(t) = 2)
+        inAny(t) = (rKind(t) <> 0)
+    Next t
+
+    ' Spellings of one counterparty - AMAZON, AMAZ, AMAZO, AMZN, AMZON, AMAZON MKTPL -
+    ' count as one, alerted and non-alerted alike: each row carries its group's key.
+    Set grp = EcmGroupKeys(inAny, rKey, rAmt, nT)
+    For t = 1 To nT
+        If inAny(t) And rKey(t) <> "" Then rKey(t) = grp(rKey(t))
+    Next t
+
+    ' Totals: per (rule, merchant), per merchant and per spelling over the
+    ' alerted rows; per merchant and per spelling over the non-alerted ones.
+    Set pairVal = EcmDict(): Set varVal = EcmDict(): Set total = EcmDict(): Set blank = EcmDict()
+    Set naVar = EcmDict(): Set naTot = EcmDict()
+    For t = 1 To nT
+        If rKey(t) <> "" Then
+            If rKind(t) = 1 Then
+                k = rRule(t) & vbTab & rKey(t)
+                pairVal(k) = pairVal(k) + rAmt(t)
+                total(rKey(t)) = total(rKey(t)) + rAmt(t)
+                k = rKey(t) & vbTab & rCp(t)
+                varVal(k) = varVal(k) + rAmt(t)
+            ElseIf rKind(t) = 2 Then
+                naTot(rKey(t)) = naTot(rKey(t)) + rAmt(t)
+                k = rKey(t) & vbTab & rCp(t)
+                naVar(k) = naVar(k) + rAmt(t)
+            End If
+        ElseIf rKind(t) = 1 And rAmt(t) <> 0 Then
+            blank(rRule(t)) = blank(rRule(t)) + rAmt(t)
         End If
-    Next k
-    ' One per rule, highest first: each time the highest (rule, merchant)
-    ' left whose rule has no pick yet and whose merchant isn't picked.
+    Next t
+    Set shown = EcmShownNames(varVal)
+    Set naShown = EcmShownNames(naVar)
+
+    ' One per rule, highest first: each time the highest (rule, merchant) left
+    ' whose rule has no pick yet and whose merchant isn't picked.
     Set ruleDone = EcmDict(): Set picked = EcmDict()
     Do While nPick < MAX_PICKS
         bestK = "": bestV = -1
@@ -5109,8 +5237,11 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
         nPick = nPick + 1
         pickKey(nPick) = parts(1)
         pickWhy(nPick) = "top of " & parts(0)
+        pickVal(nPick) = total(parts(1))
+        pickName(nPick) = CStr(shown(parts(1)))
+        pickSrc(nPick) = 1
     Loop
-    ' Fewer than 3: the highest amounts left, any rule.
+    ' Fewer than 3: the highest alerted amounts left, any rule ...
     Do While nPick < MIN_PICKS
         bestK = "": bestV = -1
         For Each k In pairVal.Keys
@@ -5125,8 +5256,118 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
         nPick = nPick + 1
         pickKey(nPick) = parts(1)
         pickWhy(nPick) = "next highest, " & parts(0)
+        pickVal(nPick) = total(parts(1))
+        pickName(nPick) = CStr(shown(parts(1)))
+        pickSrc(nPick) = 1
     Loop
-    If hadNames Then
+    ' ... and when the alerted rows have no more, the non-alerted counterparties
+    ' of the highest dollar value.
+    Do While nPick < MIN_PICKS
+        bestK = "": bestV = -1
+        For Each k In naTot.Keys
+            If Not picked.Exists(k) Then
+                If naTot(k) > bestV Then bestV = naTot(k): bestK = k
+            End If
+        Next k
+        If bestK = "" Then Exit Do
+        picked(bestK) = True
+        nPick = nPick + 1
+        pickKey(nPick) = bestK
+        pickWhy(nPick) = "non-alerted, by dollar value"
+        pickVal(nPick) = naTot(bestK)
+        pickName(nPick) = CStr(naShown(bestK))
+        pickSrc(nPick) = 2
+    Loop
+    ' Why there are fewer than 3, for the summary.
+    If nPick < MIN_PICKS Then
+        missed = vbCrLf & "   Only " & nPick & " counterpart" & IIf(nPick = 1, "y", "ies") & ": " & _
+            IIf(naTot.Count = 0, "there are no non-alerted transactions in the alerted months (the EN export's " & _
+            "Non Alerted sheet) to add from.", "no more counterparties to add.")
+    End If
+    ' The picks sorted by dollar value.
+    For i = 1 To nPick - 1
+        For j = i + 1 To nPick
+            If pickVal(j) > pickVal(i) Then
+                tmpS = pickKey(i): pickKey(i) = pickKey(j): pickKey(j) = tmpS
+                tmpS = pickWhy(i): pickWhy(i) = pickWhy(j): pickWhy(j) = tmpS
+                tmpS = pickName(i): pickName(i) = pickName(j): pickName(j) = tmpS
+                tmpD = pickVal(i): pickVal(i) = pickVal(j): pickVal(j) = tmpD
+                tmpL = pickSrc(i): pickSrc(i) = pickSrc(j): pickSrc(j) = tmpL
+            End If
+        Next j
+    Next i
+
+    For i = 18 To 22
+        If Trim$(CellStr(ws.Range("J" & i).Value)) <> "" Then nHave = nHave + 1
+    Next i
+    If nHave = 0 Then
+        For i = 1 To nPick
+            PutCaseValue ws, "J" & (17 + i), pickName(i)
+            note = note & vbCrLf & "   " & i & ". " & pickName(i) & "  " & Format$(pickVal(i), "#,##0.00") & _
+                "  (" & pickWhy(i) & ")" & EcmOtherSpellings(IIf(pickSrc(i) = 1, varVal, naVar), pickKey(i), pickName(i))
+        Next i
+        For Each k In blank.Keys
+            If ruleDone.Exists(k) Then
+                If blank(k) > pairVal(k & vbTab & ruleDone(k)) Then
+                    note = note & vbCrLf & "   Note: " & Format$(blank(k), "#,##0.00") & " in '" & k & _
+                        "' has no counterparty name - check it."
+                End If
+            End If
+        Next k
+        If nPick = 0 Then note = vbCrLf & "   none - the transactions have no counterparty names."
+        note = "Counterparties from the exported transactions, by dollar value (" & ruleDone.Count & " alert rule" & _
+            IIf(ruleDone.Count = 1, "", "s") & "):" & note & missed
+    ElseIf nHave < MIN_PICKS Then
+        ' Fewer than 3 on Sheet1: topped up from the picks it doesn't have, then
+        ' all sorted by dollar value.
+        For i = 18 To 22
+            nm = Trim$(CellStr(ws.Range("J" & i).Value))
+            If nm <> "" Then
+                nE = nE + 1
+                eName(nE) = nm
+                eRow(nE) = i
+                eWhy(nE) = "on Sheet1"
+                gk = EcmGroupOf(grp, EcmMerchantKey(nm))
+                If total.Exists(gk) Then
+                    eVal(nE) = total(gk)
+                ElseIf naTot.Exists(gk) Then
+                    eVal(nE) = naTot(gk)
+                End If
+            End If
+        Next i
+        For i = 1 To nPick
+            If nE >= MIN_PICKS Then Exit For
+            onSheet = False
+            For j = 1 To nE
+                If EcmGroupOf(grp, EcmMerchantKey(eName(j))) = pickKey(i) Then onSheet = True
+            Next j
+            If Not onSheet Then
+                nE = nE + 1
+                eName(nE) = pickName(i)
+                eVal(nE) = pickVal(i)
+                eWhy(nE) = "added: " & pickWhy(i)
+                eRow(nE) = 0
+            End If
+        Next i
+        For i = 1 To nE - 1
+            For j = i + 1 To nE
+                If eVal(j) > eVal(i) Then
+                    tmpS = eName(i): eName(i) = eName(j): eName(j) = tmpS
+                    tmpS = eWhy(i): eWhy(i) = eWhy(j): eWhy(j) = tmpS
+                    tmpD = eVal(i): eVal(i) = eVal(j): eVal(j) = tmpD
+                    tmpL = eRow(i): eRow(i) = eRow(j): eRow(j) = tmpL
+                End If
+            Next j
+        Next i
+        If nE > nHave Then EcmRewriteCps ws, eName, eRow, nE
+        note = "Counterparties - " & nHave & " from the ECM panel, " & IIf(nE > nHave, "topped up to " & nE & _
+            " and sorted by dollar value:", "nothing to add:")
+        For i = 1 To nE
+            note = note & vbCrLf & "   " & i & ". " & eName(i) & "  " & Format$(eVal(i), "#,##0.00") & "  (" & eWhy(i) & ")"
+        Next i
+        If nE < MIN_PICKS Then note = note & missed
+    Else
+        missed = ""
         note = "Counterparties already on Sheet1 were kept."
         For i = 1 To nPick
             onSheet = False
@@ -5137,41 +5378,26 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
                 End If
             Next j
             If Not onSheet Then
-                missed = missed & vbCrLf & "      " & shown(pickKey(i)) & "  " & Format$(total(pickKey(i)), "#,##0.00") & _
+                missed = missed & vbCrLf & "      " & pickName(i) & "  " & Format$(pickVal(i), "#,##0.00") & _
                     "  (" & pickWhy(i) & ")"
             End If
         Next i
         If missed <> "" Then
             note = note & vbCrLf & "   From the exported transactions the sampling rule would also pick (not on Sheet1):" & missed
         End If
-    Else
-        For i = 1 To nPick
-            PutCaseValue ws, "J" & (17 + i), CStr(shown(pickKey(i)))
-            note = note & vbCrLf & "   " & i & ". " & shown(pickKey(i)) & "  " & Format$(total(pickKey(i)), "#,##0.00") & _
-                "  (" & pickWhy(i) & ")" & EcmOtherSpellings(varVal, pickKey(i), CStr(shown(pickKey(i))))
-        Next i
-        For Each k In blank.Keys
-            If ruleDone.Exists(k) Then
-                If blank(k) > pairVal(k & vbTab & ruleDone(k)) Then
-                    note = note & vbCrLf & "   Note: " & Format$(blank(k), "#,##0.00") & " in '" & k & _
-                        "' has no counterparty name - check it."
-                End If
-            End If
-        Next k
-        If nPick = 0 Then note = vbCrLf & "   none - the alerted transactions have no counterparty names."
-        note = "Counterparties from the exported transactions (" & ruleDone.Count & " alert rule" & _
-            IIf(ruleDone.Count = 1, "", "s") & "):" & note
     End If
 
     For i = 18 To 22
         nm = Trim$(CellStr(ws.Range("J" & i).Value))
         If nm <> "" Then
-            wrote = EcmPutAddresses(ws, "T" & i, Array("X" & i, "Y" & i, "Z" & i), _
-                EcmAddrsFor(EcmGroupOf(grp, EcmMerchantKey(nm)), useRow, rKey, rCpAddr, nR), "")
+            gk = EcmGroupOf(grp, EcmMerchantKey(nm))
+            Set addrs = EcmAddrsFor(gk, isAl, rKey, rCpAddr, nT)
+            If addrs.Count = 0 Then Set addrs = EcmAddrsFor(gk, isNa, rKey, rCpAddr, nT)
+            wrote = EcmPutAddresses(ws, "T" & i, Array("X" & i, "Y" & i, "Z" & i), addrs, "")
             If wrote <> "" Then note = note & vbCrLf & "   " & nm & ": " & wrote
         End If
     Next i
-    wrote = EcmPutAddresses(ws, "", Array("X14", "Y14", "Z14"), EcmAddrsFor("", useRow, rKey, rCustAddr, nR), _
+    wrote = EcmPutAddresses(ws, "", Array("X14", "Y14", "Z14"), EcmAddrsFor("", isAl, rKey, rCustAddr, nT), _
         CellStr(ws.Range("J14").Value))
     If wrote <> "" Then note = note & vbCrLf & "Customer: " & wrote
     EcmFillFromTransactions = note
@@ -5180,6 +5406,129 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
 Failed:
     EcmFillFromTransactions = note & IIf(note <> "", vbCrLf, "") & "Filling from the transactions stopped: error " & _
         Err.Number & " - " & Err.Description
+End Function
+
+' The columns a transactions sheet (d, header in row 1) has, 0 for a missing
+' one: Alert Information, Counterparty, Transaction Amount, Dr Cr, Is Alerted
+' Transaction?, Beneficiary Name / Address / Country, Originator Name /
+' Address / Country.
+Private Function EcmCols(ByRef d As Variant) As Variant
+    Dim n As Long
+    n = UBound(d, 2)
+    EcmCols = Array(EcmCol(d, n, "Alert Information"), EcmCol(d, n, "Counterparty"), EcmCol(d, n, "Transaction Amount"), _
+        EcmCol(d, n, "Dr Cr"), EcmCol(d, n, "Is Alerted Transaction"), EcmCol(d, n, "Beneficiary Name"), _
+        EcmCol(d, n, "Beneficiary Address"), EcmCol(d, n, "Beneficiary Country"), EcmCol(d, n, "Originator Name"), _
+        EcmCol(d, n, "Originator Address"), EcmCol(d, n, "Originator Country"))
+End Function
+
+' One transaction row: its counterparty (the Counterparty column, else DR:
+' Beneficiary Name, CR: Originator Name - the export's rule), rule, amount, and
+' the address on the counterparty's side and on the customer's.
+Private Sub EcmRowInfo(ByRef d As Variant, ByVal r As Long, ByVal c As Variant, ByRef cp As String, _
+    ByRef rule As String, ByRef amt As Double, ByRef cpAddr As String, ByRef custAddr As String)
+    Dim isDr As Boolean
+    If c(3) > 0 Then isDr = (UCase$(Trim$(CellStr(d(r, c(3))))) = "DR")
+    If c(1) > 0 Then
+        cp = Trim$(CellStr(d(r, c(1))))
+    ElseIf isDr Then
+        If c(5) > 0 Then cp = Trim$(CellStr(d(r, c(5))))
+    Else
+        If c(8) > 0 Then cp = Trim$(CellStr(d(r, c(8))))
+    End If
+    If c(0) > 0 Then rule = Trim$(CellStr(d(r, c(0))))
+    If rule = "" Then rule = "(no rule)"
+    If c(2) > 0 Then amt = Abs(EcmNum(d(r, c(2))))
+    If isDr Then
+        cpAddr = EcmAddress(d, r, c(6), c(7))
+        custAddr = EcmAddress(d, r, c(9), c(10))
+    Else
+        cpAddr = EcmAddress(d, r, c(9), c(10))
+        custAddr = EcmAddress(d, r, c(6), c(7))
+    End If
+End Sub
+
+' Merchant key -> the name written for it: the merchant part of its biggest
+' spelling (spell: "key<Tab>spelling" -> amount).
+Private Function EcmShownNames(ByVal spell As Object) As Object
+    Dim out As Object, best As Object, k As Variant, parts() As String
+    Set out = EcmDict()
+    Set best = EcmDict()
+    For Each k In spell.Keys
+        parts = Split(k, vbTab)
+        If Not best.Exists(parts(0)) Then best(parts(0)) = -1
+        If spell(k) > best(parts(0)) Then
+            best(parts(0)) = spell(k)
+            out(parts(0)) = EcmMerchantName(parts(1))
+        End If
+    Next k
+    Set EcmShownNames = out
+End Function
+
+' Writes counterparties to J18 down in the order given; a name already on
+' Sheet1 (eRow > 0) takes its row's other cells - T and V:AB - with it.
+Private Sub EcmRewriteCps(ByVal ws As Worksheet, ByRef eName() As String, ByRef eRow() As Long, ByVal nE As Long)
+    Dim keep() As Variant, i As Long, c As Long, evts As Boolean, cl As Variant, moved As Variant
+    moved = Array("T", "V", "W", "X", "Y", "Z", "AA", "AB")
+    ReDim keep(1 To nE, 0 To 7)
+    For i = 1 To nE
+        If eRow(i) > 0 Then
+            For c = 0 To 7
+                keep(i, c) = ws.Range(moved(c) & eRow(i)).Value
+            Next c
+        End If
+    Next i
+    evts = Application.EnableEvents
+    Application.EnableEvents = False
+    On Error Resume Next
+    ThisWorkbook.Unprotect Password:="p7ss"
+    ws.Unprotect Password:="p7ss"
+    ws.Range("J18:J22,T18:T22,V18:AB22").Value = ""
+    On Error GoTo 0
+    Application.EnableEvents = True
+    For i = 1 To nE
+        If i > 5 Then Exit For
+        PutCaseValue ws, "J" & (17 + i), eName(i)
+        If eRow(i) > 0 Then
+            For c = 0 To 7
+                cl = moved(c)
+                If cl = "V" Then
+                    If Not IsEmpty(keep(i, c)) Then
+                        On Error Resume Next
+                        ws.Unprotect Password:="p7ss"
+                        ws.Range("V" & (17 + i)).Value = keep(i, c)
+                        On Error GoTo 0
+                    End If
+                ElseIf Trim$(CellStr(keep(i, c))) <> "" Then
+                    PutCaseValue ws, cl & (17 + i), CellStr(keep(i, c))
+                End If
+            Next c
+        End If
+    Next i
+    Application.EnableEvents = evts
+End Sub
+
+' The EN export's Non Alerted Transaction sheet - in the "...Combined Alerted &
+' Non Alerted Transactions" file it saved in the case folder - as an array
+' with its header row; Empty when there is none (or it holds only a note).
+Private Function EcmNonAlertedRows(ByVal caseDir As String) As Variant
+    Dim path As String, wb As Workbook, opened As Boolean, sh As Worksheet, nR As Long, nC As Long
+    On Error GoTo Done
+    path = EcmNewestOf(caseDir, "*_Combined Alerted & Non Alerted Transactions.xls*", 0)
+    If path = "" Then Exit Function
+    For Each wb In Workbooks
+        If StrComp(wb.fullName, path, vbTextCompare) = 0 Then Exit For
+    Next wb
+    If wb Is Nothing Then
+        Set wb = Workbooks.Open(path, ReadOnly:=True, UpdateLinks:=False)
+        opened = True
+    End If
+    Set sh = wb.Sheets("Non Alerted Transaction")
+    nR = sh.UsedRange.Row + sh.UsedRange.Rows.Count - 1
+    nC = sh.UsedRange.Column + sh.UsedRange.Columns.Count - 1
+    If nR >= 2 And nC >= 2 Then EcmNonAlertedRows = sh.Range(sh.Cells(1, 1), sh.Cells(nR, nC)).Value
+Done:
+    On Error Resume Next
+    If opened Then wb.Close SaveChanges:=False
 End Function
 
 ' Groups the counterparty keys of the counting rows that are spellings of one
@@ -5191,7 +5540,7 @@ Private Function EcmGroupKeys(ByRef useRow() As Boolean, ByRef rKey() As String,
     Dim r As Long, k As Variant, keepS As String, keepD As Double, rep As String
     Set tot = EcmDict()
     Set out = EcmDict()
-    For r = 2 To nR
+    For r = LBound(rKey) To UBound(rKey)
         If useRow(r) And rKey(r) <> "" Then tot(rKey(r)) = tot(rKey(r)) + rAmt(r)
     Next r
     n = tot.Count
@@ -5309,7 +5658,7 @@ Private Function EcmAddrsFor(ByVal key As String, ByRef useRow() As Boolean, ByR
     Dim addrKeys() As String, addrTexts() As String, addrCounts() As Long, done() As Boolean
     Dim n As Long, r As Long, j As Long, best As Long, k As String, out As New Collection
     ReDim addrKeys(1 To 1): ReDim addrTexts(1 To 1): ReDim addrCounts(1 To 1)
-    For r = 2 To nR
+    For r = LBound(rKey) To UBound(rKey)
         If useRow(r) And rAddr(r) <> "" Then
             If key = "" Or rKey(r) = key Then
                 k = EcmAddrKey(rAddr(r))
