@@ -437,6 +437,11 @@ Private m_circuitTripCount As Long
 Private m_humanSolvePending As Boolean
 Private m_lastHumanSolve As Date
 
+' The ECM import watcher (EcmWatchTick): when its next check is due, and
+' whether an import is running.
+Private mEcmNextTick As Date
+Private mEcmBusy As Boolean
+
 ' Entry point. Wire this up to your macro button.
 Sub SearchAndSavePDF_Direct()
 
@@ -3454,7 +3459,7 @@ Else
 LogStep "  CLOSE-TAB aborted - Edge lost foreground just before Ctrl+W"
 End If
 
-' Deliberately NOT calling AppActivate Application.Caption here - doing
+' Deliberately NOT calling AppActivate Application.caption here - doing
 ' so hands focus back to Excel and Windows' foreground-lock then keeps
 ' Excel active into the next iteration's keystrokes. Edge is
 ' re-foregrounded by the verify loop above instead.
@@ -4182,6 +4187,7 @@ Public Sub OsddPaste()
     Dim ws As Worksheet, start As Range, cell As Range, target As Range
     Dim txt As String, why As String, vals As Collection, i As Long, seen As String
 
+    EcmWatchStart                     ' (re)starts the ECM import watcher if Excel lost it
     On Error GoTo NativePaste
     Set ws = ThisWorkbook.Sheets("Sheet1")
     If Not ActiveWorkbook Is ThisWorkbook Then GoTo NativePaste
@@ -4307,8 +4313,8 @@ Private Sub FillCaseFromPayload(ByVal txt As String)
         End If
     Next i
     If ecm = "" Then
-        MsgBox "The copied case has no ECM Case - press Read in the ECM panel, then Copy to tool again.", _
-            vbExclamation, "Fill from ECM"
+        TopMostMsgBox "The case from ECM has no ECM Case - press Read case in the ECM panel, then import it again.", _
+            "Fill from ECM", MB_ICONWARNING
         Exit Sub
     End If
 
@@ -4316,9 +4322,9 @@ Private Sub FillCaseFromPayload(ByVal txt As String)
     ws.Activate
     cur = Trim$(CellStr(ws.Range("J9").Value))
     If cur <> "" And cur <> ecm Then
-        If MsgBox("Sheet1 has ECM case " & cur & ". Fill it with case " & ecm & " instead?" & vbCrLf & vbCrLf & _
+        If TopMostMsgBox("Sheet1 has ECM case " & cur & ". Fill it with case " & ecm & " instead?" & vbCrLf & vbCrLf & _
             "Everything Reset clears is cleared first - the decision, counterparties, OSDD inputs and country.", _
-            vbQuestion + vbYesNo, "Fill from ECM") <> vbYes Then Exit Sub
+            "Fill from ECM", MB_YESNO Or MB_ICONQUESTION) <> IDYES Then Exit Sub
         ClearCaseInputs ws
     End If
 
@@ -4424,6 +4430,127 @@ Private Sub PutCaseValue(ByVal ws As Worksheet, ByVal addr As String, ByVal v As
 End Sub
 
 '==================================================================
+' ECM IMPORT WATCHER
+'
+' The floater's "Import to tool" saves the case to Downloads as
+' <ECM>_AMLTOOL.txt, after the transaction file. While the tool is open it
+' looks in Downloads every 5 seconds; a case file found there is taken
+' (renamed first, so a second open copy of the tool can't take it too), read,
+' deleted, and imported - FillCaseFromPayload, then EcmFullCase - with no
+' Ctrl+V. Started when the workbook opens (Auto_Open) and by Ctrl+V, stopped
+' when it closes (Auto_Close); Alt+F8 > EcmWatchStart / EcmWatchStop by hand.
+'==================================================================
+Public Sub Auto_Open()
+    EcmWatchStart
+End Sub
+
+Public Sub Auto_Close()
+    EcmWatchStop
+End Sub
+
+Public Sub EcmWatchStart()
+    On Error Resume Next
+    If mEcmNextTick > Now Then Exit Sub               ' already watching
+    mEcmNextTick = Now + TimeSerial(0, 0, 5)
+    Application.OnTime mEcmNextTick, "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!EcmWatchTick"
+End Sub
+
+Public Sub EcmWatchStop()
+    On Error Resume Next
+    If mEcmNextTick <> 0 Then
+        Application.OnTime mEcmNextTick, "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!EcmWatchTick", , False
+    End If
+    mEcmNextTick = 0
+End Sub
+
+Public Sub EcmWatchTick()
+    Dim f As String
+    On Error GoTo Done
+    ' A second chain of checks (left by a reset) ends here.
+    If mEcmNextTick <> 0 And Now < mEcmNextTick - TimeSerial(0, 0, 1) Then Exit Sub
+    mEcmNextTick = 0
+    If Not mEcmBusy Then
+        f = EcmTakeCaseFile()
+        If f <> "" Then
+            mEcmBusy = True
+            EcmImportCaseFile f
+        End If
+    End If
+Done:
+    mEcmBusy = False
+    EcmWatchStart
+End Sub
+
+' The oldest <ECM>_AMLTOOL.txt in Downloads saved in the last 30 minutes (an
+' older one is left alone - it is not imported hours later), taken: renamed
+' to .taken. Returns the taken file's path, or "".
+Private Function EcmTakeCaseFile() As String
+    Dim dl As String, f As String, best As String, bestT As Date, t As Date, taken As String
+    On Error Resume Next
+    dl = EcmDownloadsFolder()
+    f = Dir$(dl & "\*_AMLTOOL*.txt")
+    Do While f <> ""
+        t = FileDateTime(dl & "\" & f)
+        If t >= Now - TimeSerial(0, 30, 0) Then
+            If best = "" Or t < bestT Then best = f: bestT = t
+        End If
+        f = Dir$()
+    Loop
+    If best = "" Then Exit Function
+    taken = dl & "\" & Left$(best, Len(best) - 4) & ".taken"
+    If Dir$(taken) <> "" Then Kill taken
+    Err.Clear
+    Name dl & "\" & best As taken
+    If Err.Number = 0 Then EcmTakeCaseFile = taken
+End Function
+
+' Reads a taken case file and imports the case, with the tool in front; the
+' file is deleted once the import has run. If the import stops with an error
+' it says so, and the file is kept as .failed in Downloads.
+Private Sub EcmImportCaseFile(ByVal path As String)
+    Dim txt As String, errNo As Long, errText As String
+    On Error GoTo Failed
+    txt = Trim$(Replace(Replace(EcmReadUtf8(path), vbCr, ""), vbLf, ""))
+    If Not IsCasePayload(txt) Then Err.Raise 5, , "the file is not a case from the ECM panel"
+    On Error Resume Next
+    AppActivate Application.caption
+    On Error GoTo Failed
+    ThisWorkbook.Activate
+    FillCaseFromPayload txt
+    On Error Resume Next
+    Kill path
+    Exit Sub
+
+Failed:
+    errNo = Err.Number
+    errText = Err.Description
+    Resume Report                     ' out of the error, so the lines below run whatever happens
+Report:
+    On Error Resume Next
+    Name path As Left$(path, Len(path) - Len(".taken")) & ".failed"
+    TopMostMsgBox "The case from the ECM panel (" & Mid$(path, InStrRev(path, "\") + 1) & ") could not be imported:" & _
+        vbCrLf & "error " & errNo & " - " & errText & vbCrLf & vbCrLf & _
+        "Its file is kept in Downloads as .failed. Press Import to tool in the panel again, or use Copy to tool and Ctrl+V.", _
+        "Import from ECM", MB_ICONWARNING
+End Sub
+
+Private Function EcmReadUtf8(ByVal path As String) As String
+    Dim st As Object
+    On Error GoTo Failed
+    Set st = CreateObject("ADODB.Stream")
+    st.Type = 2
+    st.Charset = "utf-8"
+    st.Open
+    st.LoadFromFile path
+    EcmReadUtf8 = st.ReadText
+    st.Close
+    If Left$(EcmReadUtf8, 1) = ChrW$(65279) Then EcmReadUtf8 = Mid$(EcmReadUtf8, 2)
+    Exit Function
+Failed:
+    EcmReadUtf8 = ""
+End Function
+
+'==================================================================
 ' FULL CASE FROM ECM
 '
 ' The floater's "Full case" reads the case, saves its transaction file to
@@ -4437,7 +4564,8 @@ End Sub
 '      downloading, asking for it when it isn't there - unzips a .zip and
 '      copies the Excel file(s) into Transaction Files. A Transaction Files
 '      folder that already has an Excel file is used as it is;
-'   3. runs Export Trx File, which asks Legacy / EN Network / Pivot as usual;
+'   3. runs Export Trx File as EN Network - no picker, no "complete" message
+'      (Module9's gEcmAutoMode / gEcmAutoQuiet);
 '   4. fills Sheet1 from the exported transactions (EcmFillFromTransactions)
 '      and says what was done.
 ' Nothing is deleted from Downloads; only blank Sheet1 cells are filled.
@@ -4474,19 +4602,24 @@ Private Sub EcmFullCase(ByVal ws As Worksheet, ByVal ecm As String, ByVal alertI
         If LCase$(FSO.GetExtensionName(src)) = "zip" Then steps = steps & " (unzipped from " & FSO.GetFileName(src) & ")"
     End If
 
-    ' Export Trx File, as if its button were pressed on Sheet1.
+    ' Export Trx File as EN Network, as if its button were pressed on Sheet1.
     sig = EcmCdSignature()
     t0 = Now
-    Application.StatusBar = False
+    Application.StatusBar = "ECM case " & ecm & ": exporting the transactions (EN Network) ..."
     ThisWorkbook.Activate
     ws.Activate
+    gEcmAutoMode = "EN"
+    gEcmAutoQuiet = True
     Application.Run "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!Consolidated_AML_Workflow"
+    gEcmAutoMode = ""
+    gEcmAutoQuiet = False
+    Application.StatusBar = False
     made = EcmNewExport(FSO, caseDir, t0)
     If made = "" Then
-        steps = steps & vbCrLf & "Export Trx File did not finish (cancelled, or it stopped with a message) - " & _
-            "press it when ready; the counterparties then need filling in yourself."
+        steps = steps & vbCrLf & "The EN Network export did not finish (it stopped with a message) - " & _
+            "press Export Trx File when ready; the counterparties then need filling in yourself."
     Else
-        steps = steps & vbCrLf & "Exported: " & made
+        steps = steps & vbCrLf & "Exported (EN Network): " & made
         If EcmCdSignature() <> sig Or EcmCdHasAlert(alertId) Then
             fillNote = EcmFillFromTransactions(ws)
         Else
@@ -4498,6 +4631,8 @@ Private Sub EcmFullCase(ByVal ws As Worksheet, ByVal ecm As String, ByVal alertI
     Exit Sub
 
 Failed:
+    gEcmAutoMode = ""
+    gEcmAutoQuiet = False
     EcmDone ws, ecm, filled, steps & vbCrLf & "Stopped by error " & Err.Number & ": " & Err.Description
 End Sub
 
@@ -4535,11 +4670,14 @@ End Function
 
 ' Windows' Downloads folder, wherever it has been moved to.
 Private Function EcmDownloadsFolder() As String
+    Static known As String
     Dim p As String
+    If known <> "" Then EcmDownloadsFolder = known: Exit Function
     On Error Resume Next
     p = CreateObject("Shell.Application").Namespace(CVar("shell:Downloads")).Self.path
     On Error GoTo 0
     If p = "" Then p = Environ$("USERPROFILE") & "\Downloads"
+    known = p
     EcmDownloadsFolder = p
 End Function
 
@@ -4592,6 +4730,9 @@ Private Function EcmFindDownload(ByVal ecm As String, ByVal trxName As String, B
     Loop
     Application.StatusBar = False
     If f = "" Then
+        On Error Resume Next
+        AppActivate Application.caption
+        On Error GoTo 0
         picked = Application.GetOpenFilename("ECM transaction file (*.zip;*.xlsx;*.xls;*.xlsm;*.csv)," & _
             "*.zip;*.xlsx;*.xls;*.xlsm;*.csv", , "Case " & ecm & ": pick its transaction file (not found in " & dl & ")")
         If VarType(picked) = vbString Then f = CStr(picked)
@@ -4828,7 +4969,9 @@ End Function
 '   rules in order of that amount, one each, at most 5; fewer than 3 is
 '   topped up with the highest amounts left. Names that differ only in
 '   reference codes (words with a digit), punctuation or spaces count as one
-'   merchant, written as the merchant part ("AIRBNB * HMKNMMCRE9" -> AIRBNB).
+'   merchant, written as the merchant part ("AIRBNB * HMKNMMCRE9" -> AIRBNB), and
+'   spellings of one name - AMAZON, AMAZ, AMZN, AMZON - are one counterparty
+'   (EcmSimilarKey): their amounts are added and the biggest spelling is written.
 '   Each counterparty's addresses, whoever chose the name: its side of its
 '   rows - DR: Beneficiary, CR: Originator, the rule the export's
 '   Counterparty column uses - the most frequent in T, others in X:Z.
@@ -4849,6 +4992,7 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
     Dim blank As Object, ruleDone As Object, picked As Object, k As Variant, parts() As String
     Dim pickKey(1 To MAX_PICKS) As String, pickWhy(1 To MAX_PICKS) As String, nPick As Long
     Dim hadNames As Boolean, bestK As String, bestV As Double, note As String, nm As String, wrote As String
+    Dim grp As Object, j As Long, onSheet As Boolean, missed As String
 
     On Error GoTo Failed
     Set cd = ThisWorkbook.Sheets("ConsolidatedData")
@@ -4910,76 +5054,101 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
         End If
     Next r
 
+    ' Spellings of one counterparty - AMAZON, AMAZ, AMAZO, AMZN, AMZON, AMAZON MKTPL -
+    ' count as one: each counting row carries its group's key (its biggest spelling's).
+    Set grp = EcmGroupKeys(useRow, rKey, rAmt, nR)
+    For r = 2 To nR
+        If useRow(r) And rKey(r) <> "" Then rKey(r) = grp(rKey(r))
+    Next r
+
     For i = 18 To 22
         If Trim$(CellStr(ws.Range("J" & i).Value)) <> "" Then hadNames = True
     Next i
-    If hadNames Then
-        note = "Counterparties already on Sheet1 were kept."
-    Else
-        ' Totals per (rule, merchant), per merchant, and per spelling.
-        Set pairVal = EcmDict(): Set varVal = EcmDict(): Set total = EcmDict(): Set blank = EcmDict()
-        For r = 2 To nR
-            If useRow(r) Then
-                If rKey(r) <> "" Then
-                    k = rRule(r) & vbTab & rKey(r)
-                    pairVal(k) = pairVal(k) + rAmt(r)
-                    total(rKey(r)) = total(rKey(r)) + rAmt(r)
-                    k = rKey(r) & vbTab & rCp(r)
-                    varVal(k) = varVal(k) + rAmt(r)
-                ElseIf rAmt(r) <> 0 Then
-                    blank(rRule(r)) = blank(rRule(r)) + rAmt(r)
-                End If
+    ' The sampling rule is worked out either way: it fills J18:J22 when they are
+    ' empty, and otherwise says which of its picks Sheet1 doesn't have.
+    ' Totals per (rule, merchant), per merchant, and per spelling.
+    Set pairVal = EcmDict(): Set varVal = EcmDict(): Set total = EcmDict(): Set blank = EcmDict()
+    For r = 2 To nR
+        If useRow(r) Then
+            If rKey(r) <> "" Then
+                k = rRule(r) & vbTab & rKey(r)
+                pairVal(k) = pairVal(k) + rAmt(r)
+                total(rKey(r)) = total(rKey(r)) + rAmt(r)
+                k = rKey(r) & vbTab & rCp(r)
+                varVal(k) = varVal(k) + rAmt(r)
+            ElseIf rAmt(r) <> 0 Then
+                blank(rRule(r)) = blank(rRule(r)) + rAmt(r)
             End If
-        Next r
-        ' The name written for a merchant: the merchant part of its biggest spelling.
-        Set shown = EcmDict(): Set bestVar = EcmDict()
-        For Each k In varVal.Keys
+        End If
+    Next r
+    ' The name written for a merchant: the merchant part of its biggest spelling.
+    Set shown = EcmDict(): Set bestVar = EcmDict()
+    For Each k In varVal.Keys
+        parts = Split(k, vbTab)
+        If Not bestVar.Exists(parts(0)) Then bestVar(parts(0)) = -1
+        If varVal(k) > bestVar(parts(0)) Then
+            bestVar(parts(0)) = varVal(k)
+            shown(parts(0)) = EcmMerchantName(parts(1))
+        End If
+    Next k
+    ' One per rule, highest first: each time the highest (rule, merchant)
+    ' left whose rule has no pick yet and whose merchant isn't picked.
+    Set ruleDone = EcmDict(): Set picked = EcmDict()
+    Do While nPick < MAX_PICKS
+        bestK = "": bestV = -1
+        For Each k In pairVal.Keys
             parts = Split(k, vbTab)
-            If Not bestVar.Exists(parts(0)) Then bestVar(parts(0)) = -1
-            If varVal(k) > bestVar(parts(0)) Then
-                bestVar(parts(0)) = varVal(k)
-                shown(parts(0)) = EcmMerchantName(parts(1))
+            If Not ruleDone.Exists(parts(0)) And Not picked.Exists(parts(1)) Then
+                If pairVal(k) > bestV Then bestV = pairVal(k): bestK = k
             End If
         Next k
-        ' One per rule, highest first: each time the highest (rule, merchant)
-        ' left whose rule has no pick yet and whose merchant isn't picked.
-        Set ruleDone = EcmDict(): Set picked = EcmDict()
-        Do While nPick < MAX_PICKS
-            bestK = "": bestV = -1
-            For Each k In pairVal.Keys
-                parts = Split(k, vbTab)
-                If Not ruleDone.Exists(parts(0)) And Not picked.Exists(parts(1)) Then
-                    If pairVal(k) > bestV Then bestV = pairVal(k): bestK = k
+        If bestK = "" Then Exit Do
+        parts = Split(bestK, vbTab)
+        ruleDone(parts(0)) = parts(1)
+        picked(parts(1)) = True
+        nPick = nPick + 1
+        pickKey(nPick) = parts(1)
+        pickWhy(nPick) = "top of " & parts(0)
+    Loop
+    ' Fewer than 3: the highest amounts left, any rule.
+    Do While nPick < MIN_PICKS
+        bestK = "": bestV = -1
+        For Each k In pairVal.Keys
+            parts = Split(k, vbTab)
+            If Not picked.Exists(parts(1)) Then
+                If pairVal(k) > bestV Then bestV = pairVal(k): bestK = k
+            End If
+        Next k
+        If bestK = "" Then Exit Do
+        parts = Split(bestK, vbTab)
+        picked(parts(1)) = True
+        nPick = nPick + 1
+        pickKey(nPick) = parts(1)
+        pickWhy(nPick) = "next highest, " & parts(0)
+    Loop
+    If hadNames Then
+        note = "Counterparties already on Sheet1 were kept."
+        For i = 1 To nPick
+            onSheet = False
+            For j = 18 To 22
+                nm = Trim$(CellStr(ws.Range("J" & j).Value))
+                If nm <> "" Then
+                    If EcmGroupOf(grp, EcmMerchantKey(nm)) = pickKey(i) Then onSheet = True
                 End If
-            Next k
-            If bestK = "" Then Exit Do
-            parts = Split(bestK, vbTab)
-            ruleDone(parts(0)) = parts(1)
-            picked(parts(1)) = True
-            nPick = nPick + 1
-            pickKey(nPick) = parts(1)
-            pickWhy(nPick) = "top of " & parts(0)
-        Loop
-        ' Fewer than 3: the highest amounts left, any rule.
-        Do While nPick < MIN_PICKS
-            bestK = "": bestV = -1
-            For Each k In pairVal.Keys
-                parts = Split(k, vbTab)
-                If Not picked.Exists(parts(1)) Then
-                    If pairVal(k) > bestV Then bestV = pairVal(k): bestK = k
-                End If
-            Next k
-            If bestK = "" Then Exit Do
-            parts = Split(bestK, vbTab)
-            picked(parts(1)) = True
-            nPick = nPick + 1
-            pickKey(nPick) = parts(1)
-            pickWhy(nPick) = "next highest, " & parts(0)
-        Loop
+            Next j
+            If Not onSheet Then
+                missed = missed & vbCrLf & "      " & shown(pickKey(i)) & "  " & Format$(total(pickKey(i)), "#,##0.00") & _
+                    "  (" & pickWhy(i) & ")"
+            End If
+        Next i
+        If missed <> "" Then
+            note = note & vbCrLf & "   From the exported transactions the sampling rule would also pick (not on Sheet1):" & missed
+        End If
+    Else
         For i = 1 To nPick
             PutCaseValue ws, "J" & (17 + i), CStr(shown(pickKey(i)))
             note = note & vbCrLf & "   " & i & ". " & shown(pickKey(i)) & "  " & Format$(total(pickKey(i)), "#,##0.00") & _
-                "  (" & pickWhy(i) & ")"
+                "  (" & pickWhy(i) & ")" & EcmOtherSpellings(varVal, pickKey(i), CStr(shown(pickKey(i))))
         Next i
         For Each k In blank.Keys
             If ruleDone.Exists(k) Then
@@ -4998,7 +5167,7 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
         nm = Trim$(CellStr(ws.Range("J" & i).Value))
         If nm <> "" Then
             wrote = EcmPutAddresses(ws, "T" & i, Array("X" & i, "Y" & i, "Z" & i), _
-                EcmAddrsFor(EcmMerchantKey(nm), useRow, rKey, rCpAddr, nR), "")
+                EcmAddrsFor(EcmGroupOf(grp, EcmMerchantKey(nm)), useRow, rKey, rCpAddr, nR), "")
             If wrote <> "" Then note = note & vbCrLf & "   " & nm & ": " & wrote
         End If
     Next i
@@ -5011,6 +5180,126 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
 Failed:
     EcmFillFromTransactions = note & IIf(note <> "", vbCrLf, "") & "Filling from the transactions stopped: error " & _
         Err.Number & " - " & Err.Description
+End Function
+
+' Groups the counterparty keys of the counting rows that are spellings of one
+' counterparty (EcmSimilarKey), biggest total amount first, so a group's key is
+' its biggest spelling's. Returns key -> group key.
+Private Function EcmGroupKeys(ByRef useRow() As Boolean, ByRef rKey() As String, ByRef rAmt() As Double, _
+    ByVal nR As Long) As Object
+    Dim tot As Object, out As Object, ks() As String, vs() As Double, n As Long, i As Long, j As Long
+    Dim r As Long, k As Variant, keepS As String, keepD As Double, rep As String
+    Set tot = EcmDict()
+    Set out = EcmDict()
+    For r = 2 To nR
+        If useRow(r) And rKey(r) <> "" Then tot(rKey(r)) = tot(rKey(r)) + rAmt(r)
+    Next r
+    n = tot.Count
+    If n > 0 Then
+        ReDim ks(1 To n): ReDim vs(1 To n)
+        For Each k In tot.Keys
+            i = i + 1
+            ks(i) = k
+            vs(i) = tot(k)
+        Next k
+        For i = 2 To n                                ' biggest first
+            keepS = ks(i): keepD = vs(i)
+            j = i - 1
+            Do While j >= 1
+                If vs(j) >= keepD Then Exit Do
+                ks(j + 1) = ks(j): vs(j + 1) = vs(j)
+                j = j - 1
+            Loop
+            ks(j + 1) = keepS: vs(j + 1) = keepD
+        Next i
+        For i = 1 To n                                ' each joins the first bigger spelling it matches
+            rep = ""
+            For j = 1 To i - 1
+                If EcmSimilarKey(ks(i), ks(j)) Then
+                    rep = out(ks(j))
+                    Exit For
+                End If
+            Next j
+            If rep = "" Then rep = ks(i)
+            out(ks(i)) = rep
+        Next i
+    End If
+    Set EcmGroupKeys = out
+End Function
+
+' The group key for a counterparty name on Sheet1: its own group, else the
+' group of the first (biggest) spelling it matches, else its own key.
+Private Function EcmGroupOf(ByVal grp As Object, ByVal key As String) As String
+    Dim k As Variant
+    If key = "" Then Exit Function
+    If grp.Exists(key) Then
+        EcmGroupOf = grp(key)
+        Exit Function
+    End If
+    For Each k In grp.Keys
+        If EcmSimilarKey(key, CStr(k)) Then
+            EcmGroupOf = grp(k)
+            Exit Function
+        End If
+    Next k
+    EcmGroupOf = key
+End Function
+
+' Two counterparty keys (EcmMerchantKey) that are spellings of one name: the
+' same first letter, and the shorter (4 or more letters) begins the longer -
+' AMAZ, AMAZO, AMAZON MKTPL and AMAZON - or, vowels left out, one begins the
+' other - AMZN, AMZON and AMAZON (all AMZN). JOHN SMITH and JOAN SMITH stay
+' apart.
+Private Function EcmSimilarKey(ByVal a As String, ByVal b As String) As Boolean
+    Dim s As String, l As String, ks As String, kl As String
+    If a = "" Or b = "" Then Exit Function
+    If a = b Then
+        EcmSimilarKey = True
+        Exit Function
+    End If
+    If Left$(a, 1) <> Left$(b, 1) Then Exit Function
+    If Len(a) <= Len(b) Then s = a: l = b Else s = b: l = a
+    If Len(s) >= 4 And Left$(l, Len(s)) = s Then
+        EcmSimilarKey = True
+        Exit Function
+    End If
+    ks = EcmSkeleton(a): kl = EcmSkeleton(b)
+    If Len(ks) > Len(kl) Then s = ks: ks = kl: kl = s
+    EcmSimilarKey = (Len(ks) >= 4 And Left$(kl, Len(ks)) = ks)
+End Function
+
+' A key's first letter and its consonants, a letter repeated once - AMAZON,
+' AMZON and AMZN all give AMZN.
+Private Function EcmSkeleton(ByVal k As String) As String
+    Dim i As Long, ch As String, out As String
+    If k = "" Then Exit Function
+    out = Left$(k, 1)
+    For i = 2 To Len(k)
+        ch = Mid$(k, i, 1)
+        If InStr(1, "AEIOUY", ch, vbBinaryCompare) = 0 Then
+            If ch <> Right$(out, 1) Then out = out & ch
+        End If
+    Next i
+    EcmSkeleton = out
+End Function
+
+' "  - also as AMZN Mktp US, AMAZON MKTPL" - a picked counterparty's other
+' spellings, for the summary.
+Private Function EcmOtherSpellings(ByVal varVal As Object, ByVal gk As String, ByVal shownName As String) As String
+    Dim k As Variant, parts() As String, nm As String, seen As String, n As Long, out As String
+    seen = "|" & UCase$(shownName) & "|"
+    For Each k In varVal.Keys
+        parts = Split(k, vbTab)
+        If StrComp(parts(0), gk, vbTextCompare) = 0 Then
+            nm = EcmMerchantName(parts(1))
+            If InStr(1, seen, "|" & UCase$(nm) & "|", vbBinaryCompare) = 0 Then
+                seen = seen & UCase$(nm) & "|"
+                n = n + 1
+                If n <= 3 Then out = out & IIf(out = "", "", ", ") & nm
+            End If
+        End If
+    Next k
+    If n > 0 Then EcmOtherSpellings = "  - also as " & out & IIf(n > 3, " and " & (n - 3) & " more", "")
 End Function
 
 ' The distinct addresses in rAddr of the counting rows of one merchant (key)
@@ -5194,13 +5483,16 @@ End Function
 
 ' A counterparty name safe for file names, merging and searches: characters
 ' Windows forbids in file names become a space, other punctuation goes;
-' letters (accented too), digits, spaces, hyphens and "&" stay.
+' letters (accented too), digits, spaces, hyphens and "&" stay, and a dot
+' inside a word ("Amazon.com").
 Private Function EcmCleanCpName(ByVal s As String) As String
     Dim i As Long, ch As String, out As String
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
         If ch Like "[A-Za-z0-9-]" Or ch = " " Or ch = "&" Then
             out = out & ch
+        ElseIf ch = "." And i > 1 And i < Len(s) Then
+            If Mid$(s, i - 1, 1) Like "[A-Za-z0-9]" And Mid$(s, i + 1, 1) Like "[A-Za-z0-9]" Then out = out & ch
         ElseIf AscW(ch) >= 192 And (UCase$(ch) <> LCase$(ch) Or AscW(ch) >= 12288) Then
             out = out & ch
         ElseIf InStr("\/:*?""<>|" & vbTab & vbCr & vbLf, ch) > 0 Then
@@ -5213,26 +5505,106 @@ Private Function EcmCleanCpName(ByVal s As String) As String
     EcmCleanCpName = out
 End Function
 
-' A counterparty's merchant: upper-case words without digits (the first word
-' always counts, for names like "7-ELEVEN"), punctuation and spaces removed -
-' "AIRBNB * HMP94KJQ23" -> AIRBNB, "SAMS CLUB #4989" -> SAMSCLUB.
+' A counterparty name without the reference code after it: after the first
+' word, a word with a digit goes, and so does a letters-only code after * or #;
+' a code after a dot goes too. "AMAZON MKTPL*2K4L39RT2" -> AMAZON MKTPL,
+' "Amazon.CZNNFWBGO" -> Amazon, "AMZN Mktp US*CZNNFWBGO" -> AMZN Mktp US,
+' "THE HOME DEPOT #0816" -> THE HOME DEPOT, "7-ELEVEN 39484" -> 7-ELEVEN;
+' "Amazon.com" and "PAYPAL *JOHNSMITH" stay. The name as it is when it has
+' no such code. (The same rule as the ECM floater's.)
+Private Function EcmStripCodes(ByVal s As String) As String
+    Dim i As Long, ch As String, tok As String, kept As String, out As String
+    Dim afterMark As Boolean, n As Long, cut As Boolean
+    s = Trim$(Replace(Replace(Replace(s, vbTab, " "), vbCr, " "), vbLf, " "))
+    For i = 1 To Len(s) + 1
+        If i <= Len(s) Then ch = Mid$(s, i, 1) Else ch = " "
+        If ch = " " Or ch = "*" Or ch = "#" Then
+            If tok <> "" Then
+                n = n + 1
+                kept = EcmKeepWord(tok, n = 1, afterMark)
+                If kept <> tok Then cut = True
+                If kept <> "" Then out = out & " " & kept
+                tok = ""
+                afterMark = False
+            End If
+            If ch <> " " Then afterMark = True
+        Else
+            tok = tok & ch
+        End If
+    Next i
+    If cut And Trim$(out) <> "" Then EcmStripCodes = Trim$(out) Else EcmStripCodes = s
+End Function
+
+' One word of a counterparty name, without a code after a dot; "" when the
+' word itself is a code - not the first word, and a digit in it, or a
+' letters-only code straight after * or #.
+Private Function EcmKeepWord(ByVal w As String, ByVal isFirst As Boolean, ByVal afterMark As Boolean) As String
+    Dim p As Long, tail As String
+    p = InStrRev(w, ".")
+    If p > 1 And p < Len(w) Then
+        tail = Mid$(w, p + 1)
+        If (tail Like "*#*" And Len(tail) >= 3) Or EcmLooksCode(tail) Then w = Left$(w, p - 1)
+    End If
+    If Not isFirst Then
+        If w Like "*#*" Then Exit Function
+        If afterMark And EcmLooksCode(w) Then Exit Function
+    End If
+    EcmKeepWord = w
+End Function
+
+' A letters-only reference code: 6 or more capitals with 5 consonants in a
+' row, or hardly any vowels ("CZNNFWBGO") - not a word or name like
+' "JOHNSMITH" or "COFFEE".
+Private Function EcmLooksCode(ByVal w As String) As Boolean
+    Dim i As Long, c As Long, streak As Long, most As Long, vowels As Long
+    If Len(w) < 6 Then Exit Function
+    For i = 1 To Len(w)
+        c = AscW(Mid$(w, i, 1))
+        If c < 65 Or c > 90 Then Exit Function
+        If InStr(1, "AEIOUY", ChrW$(c), vbBinaryCompare) > 0 Then
+            vowels = vowels + 1
+            streak = 0
+        Else
+            streak = streak + 1
+            If streak > most Then most = streak
+        End If
+    Next i
+    EcmLooksCode = (most >= 5 Or vowels <= 0.15 * Len(w))
+End Function
+
+' For comparing merchants only: "AMAZON.COM" -> "AMAZON".
+Private Function EcmNoDomain(ByVal w As String) As String
+    Dim suffix As Variant
+    For Each suffix In Array(".CO.UK", ".COM", ".NET", ".ORG", ".CO", ".IO", ".US")
+        If Len(w) > Len(suffix) And UCase$(Right$(w, Len(suffix))) = suffix Then
+            EcmNoDomain = Left$(w, Len(w) - Len(suffix))
+            Exit Function
+        End If
+    Next suffix
+    EcmNoDomain = w
+End Function
+
+' A counterparty's merchant: its name without codes (EcmStripCodes), upper
+' case, punctuation, spaces and a web domain's ending removed -
+' "AIRBNB * HMP94KJQ23" -> AIRBNB, "SAMS CLUB #4989" -> SAMSCLUB,
+' "AMAZON.COM*MK12", "Amazon.com" and "Amazon.CZNNFWBGO" -> AMAZON.
 Private Function EcmMerchantKey(ByVal cp As String) As String
     Dim w As Variant, k As String, cleaned As String, first As Boolean
-    cleaned = UCase$(EcmCleanCpName(cp))
+    cleaned = UCase$(EcmCleanCpName(EcmStripCodes(cp)))
     first = True
     For Each w In Split(cleaned, " ")
-        If first Or Not (w Like "*[0-9]*") Then k = k & Replace(CStr(w), "-", "")
+        If first Or Not (w Like "*[0-9]*") Then k = k & Replace(EcmNoDomain(CStr(w)), "-", "")
         first = False
     Next w
     If k = "" Then k = Replace(Replace(cleaned, " ", ""), "-", "")
-    EcmMerchantKey = k
+    EcmMerchantKey = Replace(k, ".", "")
 End Function
 
-' The name written for a merchant: the cleaned name without its coded words
-' ("THE HOME DEPOT #0816" -> THE HOME DEPOT).
+' The name written for a merchant: the cleaned name without its codes
+' ("THE HOME DEPOT #0816" -> THE HOME DEPOT, "Amazon.CZNNFWBGO" -> Amazon).
 Private Function EcmMerchantName(ByVal cp As String) As String
     Dim w As Variant, out As String, cleaned As String, first As Boolean
-    cleaned = EcmCleanCpName(cp)
+    cleaned = EcmCleanCpName(EcmStripCodes(cp))
     first = True
     For Each w In Split(cleaned, " ")
         If (first Or Not (w Like "*[0-9]*")) And w <> "&" Then out = out & " " & w

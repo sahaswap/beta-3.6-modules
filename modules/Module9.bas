@@ -1,6 +1,12 @@
 Attribute VB_Name = "Module9"
 Option Explicit
 
+' Set by the ECM import (Module2's EcmFullCase) for one run: the export type
+' to use without asking ("EN"), and no "export complete" message. Empty /
+' False whenever Export Trx File is pressed.
+Public gEcmAutoMode As String
+Public gEcmAutoQuiet As Boolean
+
 Sub Consolidated_AML_Workflow()
 
 ' ==========================================
@@ -71,14 +77,18 @@ End If
 ' 1b. EXPORT FORMAT PICKER - frmExportMode
 ' ==========================================
 Dim exportMode As String
-frmExportMode.Show vbModal
+If gEcmAutoMode <> "" Then
+    exportMode = gEcmAutoMode                 ' the ECM import: no picker
+Else
+    frmExportMode.Show vbModal
 
-If frmExportMode.userCancelled Then
+    If frmExportMode.userCancelled Then
+        Unload frmExportMode
+        Exit Sub
+    End If
+    exportMode = frmExportMode.SelectedMode   ' "LEGACY" / "EN" / "PIVOT"
     Unload frmExportMode
-    Exit Sub
 End If
-exportMode = frmExportMode.SelectedMode   ' "LEGACY" / "EN" / "PIVOT"
-Unload frmExportMode
 
 Dim sourceFolderName As String
 If exportMode = "PIVOT" Then
@@ -222,7 +232,7 @@ If exportMode = "PIVOT" Then
     Application.OnTime Now + TimeSerial(0, 0, 1), "PushTrxTracker_Deferred"
     On Error GoTo 0
 
-    MsgBox "Pivot Analysis export complete!" & vbCrLf & _
+    If Not gEcmAutoQuiet Then MsgBox "Pivot Analysis export complete!" & vbCrLf & _
         "ConsolidatedData was not touched." & vbCrLf & _
         "Saved to:" & vbCrLf & pivotSavePath, vbInformation, "Success"
     Exit Sub
@@ -625,7 +635,7 @@ If exportMode = "EN" Then
     Application.OnTime Now + TimeSerial(0, 0, 1), "PushTrxTracker_Deferred"
     On Error GoTo 0
 
-    MsgBox "EN Network export complete! Both files were generated:" & vbCrLf & vbCrLf & _
+    If Not gEcmAutoQuiet Then MsgBox "EN Network export complete! Both files were generated:" & vbCrLf & vbCrLf & _
         "Lookback Transactions:" & vbCrLf & lbSavedPath & vbCrLf & vbCrLf & _
         "Alerted / Non-Alerted Transactions:" & vbCrLf & finalSavePath, vbInformation, "Success"
     Exit Sub
@@ -868,7 +878,7 @@ On Error Resume Next
 Application.OnTime Now + TimeSerial(0, 0, 1), "PushTrxTracker_Deferred"
 On Error GoTo 0
 
-MsgBox "Workflow Complete!" & vbCrLf & _
+If Not gEcmAutoQuiet Then MsgBox "Workflow Complete!" & vbCrLf & _
 "Exported file inside the folder exactly to: " & vbCrLf & finalSavePath, vbInformation, "Success"
 Exit Sub
 
