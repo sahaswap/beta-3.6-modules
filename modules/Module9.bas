@@ -7,6 +7,13 @@ Option Explicit
 Public gEcmAutoMode As String
 Public gEcmAutoQuiet As Boolean
 
+' Sets gEcmAutoMode / gEcmAutoQuiet - called by Module2 through Application.Run,
+' so Module2 still compiles beside an older Module9.
+Public Sub EcmSetAutoExport(ByVal mode As String, ByVal quiet As Boolean)
+    gEcmAutoMode = mode
+    gEcmAutoQuiet = quiet
+End Sub
+
 Sub Consolidated_AML_Workflow()
 
 ' ==========================================

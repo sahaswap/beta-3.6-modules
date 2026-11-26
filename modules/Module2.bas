@@ -4146,6 +4146,7 @@ End Sub
 ' already on the sheet).
 Public Sub OsddFillNegNews(ByVal changed As Range, Optional ByVal onlyBlank As Boolean = False)
     Dim ws As Worksheet, cell As Range, r As Long, evts As Boolean, wasProt As Boolean, done As String
+    EcmWatchStart                     ' (re)starts the ECM import watcher if Excel lost it
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
     If Not changed.Worksheet Is ws Then Exit Sub
@@ -4582,24 +4583,26 @@ End Sub
 ' Alt+F8: whether the ECM import watcher is running (it is started if not), the
 ' Downloads folder it looks in, and the floater's case files there.
 Public Sub EcmWatchStatus()
-    Dim dl As String, f As String, files As String, pat As Variant, msg As String, wasOn As Boolean
+    Dim dl As Variant, f As String, files As String, pat As Variant, msg As String, wasOn As Boolean, dirs As String
     wasOn = (mEcmNextTick > Now - TimeSerial(0, 0, 1))
     EcmWatchStart
-    dl = EcmDownloadsFolder()
-    For Each pat In Array("*_AMLTOOL*.txt", "*_AMLTOOL*.taken", "*_AMLTOOL*.failed")
-        f = Dir$(dl & "\" & pat)
-        Do While f <> ""
-            files = files & vbCrLf & "   " & f & "  (" & Format$(FileDateTime(dl & "\" & f), "dd mmm hh:nn:ss") & ")"
-            f = Dir$()
-        Loop
-    Next pat
+    For Each dl In EcmDownloadFolders()
+        dirs = dirs & vbCrLf & "   " & dl
+        For Each pat In Array("*_AMLTOOL*.txt", "*_AMLTOOL*.taken", "*_AMLTOOL*.failed")
+            f = Dir$(dl & "\" & pat)
+            Do While f <> ""
+                files = files & vbCrLf & "   " & f & "  (" & Format$(FileDateTime(dl & "\" & f), "dd mmm hh:nn:ss") & ")"
+                f = Dir$()
+            Loop
+        Next pat
+    Next dl
     If wasOn Then
         msg = "The ECM import watcher is running: next look at " & Format$(mEcmNextTick, "hh:nn:ss") & "."
     Else
         msg = "The ECM import watcher was NOT running - it is started now. (It starts by itself when the tool " & _
             "opens; if it keeps stopping, tell whoever looks after the tool.)"
     End If
-    msg = msg & vbCrLf & vbCrLf & "It looks in: " & dl & vbCrLf & "and at the clipboard." & vbCrLf & vbCrLf & _
+    msg = msg & vbCrLf & vbCrLf & "It looks in:" & dirs & vbCrLf & "and at the clipboard." & vbCrLf & vbCrLf & _
         "Case files from the ECM panel there:" & IIf(files = "", vbCrLf & "   none", files) & vbCrLf & vbCrLf & _
         "Last case taken in: " & IIf(mEcmLastAuto = "", "none since the tool opened", Replace(mEcmLastAuto, "|", " (sent ") & _
         IIf(mEcmLastAuto = "", "", ")")) & vbCrLf & vbCrLf & _
@@ -4613,22 +4616,23 @@ End Sub
 ' older one is left alone - it is not imported hours later), taken: renamed
 ' to .taken. Returns the taken file's path, or "".
 Private Function EcmTakeCaseFile() As String
-    Dim dl As String, f As String, best As String, bestT As Date, t As Date, taken As String
+    Dim dl As Variant, f As String, best As String, bestDir As String, bestT As Date, t As Date, taken As String
     On Error Resume Next
-    dl = EcmDownloadsFolder()
-    f = Dir$(dl & "\*_AMLTOOL*.txt")
-    Do While f <> ""
-        t = FileDateTime(dl & "\" & f)
-        If t >= Now - TimeSerial(0, 30, 0) Then
-            If best = "" Or t < bestT Then best = f: bestT = t
-        End If
-        f = Dir$()
-    Loop
+    For Each dl In EcmDownloadFolders()
+        f = Dir$(dl & "\*_AMLTOOL*.txt")
+        Do While f <> ""
+            t = FileDateTime(dl & "\" & f)
+            If t >= Now - TimeSerial(0, 30, 0) Then
+                If best = "" Or t < bestT Then best = f: bestDir = dl: bestT = t
+            End If
+            f = Dir$()
+        Loop
+    Next dl
     If best = "" Then Exit Function
-    taken = dl & "\" & Left$(best, Len(best) - 4) & ".taken"
+    taken = bestDir & "\" & Left$(best, Len(best) - 4) & ".taken"
     If Dir$(taken) <> "" Then Kill taken
     Err.Clear
-    Name dl & "\" & best As taken
+    Name bestDir & "\" & best As taken
     If Err.Number = 0 Then EcmTakeCaseFile = taken
 End Function
 
@@ -4690,7 +4694,8 @@ End Function
 '      copies the Excel file(s) into Transaction Files. A Transaction Files
 '      folder that already has an Excel file is used as it is;
 '   3. runs Export Trx File as EN Network - no picker, no "complete" message
-'      (Module9's gEcmAutoMode / gEcmAutoQuiet);
+'      (Module9's EcmSetAutoExport, run by name, so an older Module9 just
+'      shows its picker);
 '   4. fills Sheet1 from the exported transactions (EcmFillFromTransactions)
 '      and says what was done.
 ' Nothing is deleted from Downloads; only blank Sheet1 cells are filled.
@@ -4733,11 +4738,14 @@ Private Sub EcmFullCase(ByVal ws As Worksheet, ByVal ecm As String, ByVal alertI
     Application.StatusBar = "ECM case " & ecm & ": exporting the transactions (EN Network) ..."
     ThisWorkbook.Activate
     ws.Activate
-    gEcmAutoMode = "EN"
-    gEcmAutoQuiet = True
+    On Error Resume Next
+    Application.Run "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!EcmSetAutoExport", "EN", True
+    If Err.Number <> 0 Then steps = steps & vbCrLf & "(Module9 is older than Module2 - its export picker shows; " & _
+        "import the new Module9 for the EN export without it.)"
+    Err.Clear
+    On Error GoTo Failed
     Application.Run "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!Consolidated_AML_Workflow"
-    gEcmAutoMode = ""
-    gEcmAutoQuiet = False
+    EcmAutoExportOff
     Application.StatusBar = False
     made = EcmNewExport(FSO, caseDir, t0)
     If made = "" Then
@@ -4756,9 +4764,14 @@ Private Sub EcmFullCase(ByVal ws As Worksheet, ByVal ecm As String, ByVal alertI
     Exit Sub
 
 Failed:
-    gEcmAutoMode = ""
-    gEcmAutoQuiet = False
+    EcmAutoExportOff
     EcmDone ws, ecm, filled, steps & vbCrLf & "Stopped by error " & Err.Number & ": " & Err.Description
+End Sub
+
+' Export Trx File back to asking for its export type.
+Private Sub EcmAutoExportOff()
+    On Error Resume Next
+    Application.Run "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!EcmSetAutoExport", "", False
 End Sub
 
 ' The closing message, over every window, with Sheet1 in front.
@@ -4793,17 +4806,36 @@ Private Function EcmExcelFiles(ByVal folder As String) As String
     Loop
 End Function
 
-' Windows' Downloads folder, wherever it has been moved to.
-Private Function EcmDownloadsFolder() As String
-    Static known As String
-    Dim p As String
-    If known <> "" Then EcmDownloadsFolder = known: Exit Function
+' The folders downloads may land in: Windows' Downloads folder (wherever it
+' has been moved to), the profile's own Downloads folder and OneDrive's - a
+' browser setting can point to any of them, and each is looked in.
+Private Function EcmDownloadFolders() As Collection
+    Static known As Collection
+    Dim c As New Collection, p As Variant, s As String, FSO As Object
+    If Not known Is Nothing Then
+        Set EcmDownloadFolders = known
+        Exit Function
+    End If
+    Set FSO = CreateObject("Scripting.FileSystemObject")
     On Error Resume Next
-    p = CreateObject("Shell.Application").Namespace(CVar("shell:Downloads")).Self.path
+    s = CreateObject("Shell.Application").Namespace(CVar("shell:Downloads")).Self.path
+    For Each p In Array(s, Environ$("USERPROFILE") & "\Downloads", Environ$("OneDriveCommercial") & "\Downloads", _
+                        Environ$("OneDrive") & "\Downloads")
+        If Len(p) > 10 Then
+            If FSO.FolderExists(CStr(p)) And Not InList(c, CStr(p)) Then c.Add CStr(p)
+        End If
+    Next p
     On Error GoTo 0
-    If p = "" Then p = Environ$("USERPROFILE") & "\Downloads"
-    known = p
-    EcmDownloadsFolder = p
+    If c.Count = 0 Then c.Add Environ$("USERPROFILE") & "\Downloads"
+    Set known = c
+    Set EcmDownloadFolders = c
+End Function
+
+' The first of them, for messages.
+Private Function EcmDownloadsFolder() As String
+    Dim c As Collection
+    Set c = EcmDownloadFolders()
+    EcmDownloadsFolder = c(1)
 End Function
 
 ' "yyyymmddhhnnss" as a date (0 when it isn't one).
@@ -4821,19 +4853,30 @@ Private Function EcmElapsed(ByVal t0 As Single) As Single
     If EcmElapsed < 0 Then EcmElapsed = EcmElapsed + 86400
 End Function
 
-' The case's transaction file in Downloads, once it has finished
-' downloading. Waits 20 seconds for it, or 3 minutes while the browser is
-' still downloading something; then asks for it. "" = none.
+' The case's transaction file in the download folders, once it has finished
+' downloading. Waits 20 seconds for a file the floater named, 3 minutes for
+' one it hasn't named yet (the case can arrive before its file) or while the
+' browser is still downloading something; then asks for it. "" = none.
 Private Function EcmFindDownload(ByVal ecm As String, ByVal trxName As String, ByVal trxAt As String) As String
-    Dim dl As String, since As Date, t0 As Single, f As String, size0 As Double, size1 As Double
+    Dim dl As Variant, since As Date, t0 As Single, f As String, g As String, size0 As Double, size1 As Double
     Dim longest As Single, picked As Variant
-    dl = EcmDownloadsFolder()
     since = EcmStamp(trxAt)
-    longest = 20
+    longest = IIf(trxName = "", 180, 20)
     size0 = -1
     t0 = Timer
     Do
-        f = EcmNewestDownload(dl, ecm, trxName, since)
+        f = ""
+        For Each dl In EcmDownloadFolders()
+            g = EcmNewestDownload(CStr(dl), ecm, trxName, since)
+            If g <> "" Then
+                If f = "" Then
+                    f = g
+                ElseIf FileDateTime(g) > FileDateTime(f) Then
+                    f = g
+                End If
+            End If
+            If EcmDownloading(CStr(dl)) Then longest = 180
+        Next dl
         If f <> "" Then
             size1 = -1
             On Error Resume Next
@@ -4844,12 +4887,11 @@ Private Function EcmFindDownload(ByVal ecm As String, ByVal trxName As String, B
         Else
             size0 = -1
         End If
-        If EcmDownloading(dl) Then longest = 180
         If EcmElapsed(t0) > longest Then
             f = ""
             Exit Do
         End If
-        Application.StatusBar = "ECM case " & ecm & ": waiting for its transaction file in " & dl & " ..."
+        Application.StatusBar = "ECM case " & ecm & ": waiting for its transaction file in Downloads ..."
         Application.Wait Now + TimeSerial(0, 0, 1)
         DoEvents
     Loop
@@ -4859,7 +4901,7 @@ Private Function EcmFindDownload(ByVal ecm As String, ByVal trxName As String, B
         AppActivate Application.caption
         On Error GoTo 0
         picked = Application.GetOpenFilename("ECM transaction file (*.zip;*.xlsx;*.xls;*.xlsm;*.csv)," & _
-            "*.zip;*.xlsx;*.xls;*.xlsm;*.csv", , "Case " & ecm & ": pick its transaction file (not found in " & dl & ")")
+            "*.zip;*.xlsx;*.xls;*.xlsm;*.csv", , "Case " & ecm & ": pick its transaction file (not found in Downloads)")
         If VarType(picked) = vbString Then f = CStr(picked)
     End If
     EcmFindDownload = f
@@ -4909,7 +4951,11 @@ Private Function EcmNewestDownload(ByVal dl As String, ByVal ecm As String, ByVa
             Exit Function
         End If
     End If
-    best = EcmNewestOf(dl, ecm & "_*", 0)
+    If since > 0 Then
+        best = EcmNewestOf(dl, ecm & "_*", since - TimeSerial(0, 1, 0))
+    Else
+        best = EcmNewestOf(dl, ecm & "_*", 0)
+    End If
     If best = "" And trxName = "" And since > 0 Then best = EcmNewestOf(dl, "*", since - TimeSerial(0, 1, 0))
     EcmNewestDownload = best
 End Function
