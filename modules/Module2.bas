@@ -5151,8 +5151,10 @@ End Function
 '   Each counterparty's addresses: its side of its rows - DR: Beneficiary,
 '   CR: Originator, the rule the export's Counterparty column uses - alerted
 '   rows first, else non-alerted: the most frequent in T, others in X:Z.
-'   The customer's other addresses (X14:Z14): the customer's side of the
-'   alerted rows - DR: Originator, CR: Beneficiary - that differ from J14.
+'   The customer's addresses: the customer's side of the alerted rows (else
+'   the non-alerted ones) - DR: Originator, CR: Beneficiary. The most frequent
+'   is Customer Address (J14), in place of ECM's (kept only when there is
+'   none); the others go to X14:Z14.
 ' Address cells are filled only when blank; an address that is only a
 ' country, or the same as one already there (case, punctuation, a country
 ' at the end, a missing zip or unit ignored), is left out. Returns what was
@@ -5443,8 +5445,22 @@ Private Function EcmFillFromTransactions(ByVal ws As Worksheet, ByVal naData As 
             If wrote <> "" Then note = note & vbCrLf & "   " & nm & ": " & wrote
         End If
     Next i
-    wrote = EcmPutAddresses(ws, "", Array("X14", "Y14", "Z14"), EcmAddrsFor("", isAl, rKey, rCustAddr, nT), _
-        CellStr(ws.Range("J14").Value))
+    ' The customer's addresses from the transactions - its side of the alerted rows, else of the
+    ' non-alerted ones: the most frequent is Customer Address (J14), in place of ECM's, which is
+    ' kept only when the transactions have none; the others go to X14:Z14.
+    Set addrs = EcmAddrsFor("", isAl, rKey, rCustAddr, nT)
+    If addrs.Count = 0 Then Set addrs = EcmAddrsFor("", isNa, rKey, rCustAddr, nT)
+    nm = Trim$(CellStr(ws.Range("J14").Value))
+    If addrs.Count > 0 Then
+        If Not EcmSameAddrKey(EcmAddrKey(nm), EcmAddrKey(CStr(addrs(1)))) Then
+            PutCaseValue ws, "J14", CStr(addrs(1))
+            note = note & vbCrLf & "Customer Address from the transactions: " & addrs(1) & _
+                IIf(nm <> "", "  (ECM had: " & nm & ")", "")
+        End If
+    ElseIf nm <> "" Then
+        note = note & vbCrLf & "Customer Address: the transactions have none - ECM's is kept."
+    End If
+    wrote = EcmPutAddresses(ws, "", Array("X14", "Y14", "Z14"), addrs, CellStr(ws.Range("J14").Value))
     If wrote <> "" Then note = note & vbCrLf & "Customer: " & wrote
     EcmFillFromTransactions = note
     Exit Function

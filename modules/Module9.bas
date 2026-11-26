@@ -422,10 +422,13 @@ If exportMode = "EN" Then
         MsgBox "No dated 'Yes' alerted transactions were found, so the EN Network export can't be built.", vbCritical, "No Alerted Rows"
         GoTo CancelHandler
     End If
-    ' START: the first day of the FIRST alerted transaction's month, one
-    ' year back. First alert 18 Aug 2025 -> lookback starts 01 Aug 2024.
+    ' START: the FIRST alerted day, one year back - the large export's rule
+    ' too (modLargeExport's LookbackStartDate). First alert 06/22/2026 ->
+    ' lookback starts 06/22/2025. DateSerial drops any time of day, and DateAdd
+    ' takes 02/29 back to 02/28 rather than on to 03/01. (It used to start on
+    ' the first day of that month, a year back: 06/01/2025.)
     '
-    ' This was measured back from the LATEST alert, which gave a window of
+    ' This was once measured back from the LATEST alert, which gave a window of
     ' 12 months before the last alert rather than 12 months before the
     ' first. With alerts spread across several months that is wrong in two
     ' ways: the history before the first alert is cut short by however far
@@ -433,7 +436,7 @@ If exportMode = "EN" Then
     ' earliest alerted transaction falls outside its own lookback entirely.
     ' Anchoring the start on the first alert guarantees a full year of
     ' history before any alerted activity, and every alert in the window.
-    lbStart = DateSerial(Year(firstAlertedLB) - 1, Month(firstAlertedLB), 1)
+    lbStart = DateAdd("yyyy", -1, DateSerial(Year(firstAlertedLB), Month(firstAlertedLB), Day(firstAlertedLB)))
 
     ' End of the MONTH the last alerted transaction falls in, not the
     ' alerted date itself. Last alerted 09/10 -> window ends 09/30.
@@ -1327,7 +1330,8 @@ Private Sub FilterRowsFast(ByVal ws As Worksheet, ByVal splitCol As Long, _
         If keep And useWindow Then
             dv = ArrCell(dVals, r)
             If IsDate(dv) Then
-                If CDate(dv) < winStart Or CDate(dv) > winEnd Then keep = False
+                ' By the day: a date-time on the window's last day is in it.
+                If Int(CDate(dv)) < winStart Or Int(CDate(dv)) > winEnd Then keep = False
             Else
                 keep = False
             End If
