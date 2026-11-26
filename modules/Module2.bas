@@ -5505,23 +5505,23 @@ Private Function EcmCleanCpName(ByVal s As String) As String
     EcmCleanCpName = out
 End Function
 
-' A counterparty name without the reference code after it: after the first
-' word, a word with a digit goes, and so does a letters-only code after * or #;
-' a code after a dot goes too. "AMAZON MKTPL*2K4L39RT2" -> AMAZON MKTPL,
-' "Amazon.CZNNFWBGO" -> Amazon, "AMZN Mktp US*CZNNFWBGO" -> AMZN Mktp US,
-' "THE HOME DEPOT #0816" -> THE HOME DEPOT, "7-ELEVEN 39484" -> 7-ELEVEN;
-' "Amazon.com" and "PAYPAL *JOHNSMITH" stay. The name as it is when it has
-' no such code. (The same rule as the ECM floater's.)
+' A counterparty name without the codes around it: after the first word, a
+' word with a digit goes, and so does a letters-only code after * or #; a code
+' after a dot goes too, and codes joined to the name with hyphens; a first
+' word that is a number code goes as well. "AMAZON MKTPL*2K4L39RT2" ->
+' AMAZON MKTPL, "Amazon.QXZKWPRTB" -> Amazon, "ABA123456789-9F3E7A...-AMAZON"
+' -> AMAZON, "THE HOME DEPOT #0816" -> THE HOME DEPOT, "7-ELEVEN 39484" ->
+' 7-ELEVEN; "Amazon.com", "WAL-MART" and "PAYPAL *JOHNSMITH" stay. The name
+' as it is when it has no such code. (The same rule as the ECM floater's.)
 Private Function EcmStripCodes(ByVal s As String) As String
     Dim i As Long, ch As String, tok As String, kept As String, out As String
-    Dim afterMark As Boolean, n As Long, cut As Boolean
+    Dim afterMark As Boolean, cut As Boolean
     s = Trim$(Replace(Replace(Replace(s, vbTab, " "), vbCr, " "), vbLf, " "))
     For i = 1 To Len(s) + 1
         If i <= Len(s) Then ch = Mid$(s, i, 1) Else ch = " "
         If ch = " " Or ch = "*" Or ch = "#" Then
             If tok <> "" Then
-                n = n + 1
-                kept = EcmKeepWord(tok, n = 1, afterMark)
+                kept = EcmKeepWord(tok, Trim$(out) = "", afterMark)
                 If kept <> tok Then cut = True
                 If kept <> "" Then out = out & " " & kept
                 tok = ""
@@ -5535,25 +5535,55 @@ Private Function EcmStripCodes(ByVal s As String) As String
     If cut And Trim$(out) <> "" Then EcmStripCodes = Trim$(out) Else EcmStripCodes = s
 End Function
 
-' One word of a counterparty name, without a code after a dot; "" when the
-' word itself is a code - not the first word, and a digit in it, or a
-' letters-only code straight after * or #.
+' One word of a counterparty name, without a code after a dot or codes joined
+' with hyphens; "" when the word itself is a code - the first word kept so far
+' (isFirst) only when it is a number code (EcmDigitCode), any other with a
+' digit in it, or a letters-only code straight after * or #.
 Private Function EcmKeepWord(ByVal w As String, ByVal isFirst As Boolean, ByVal afterMark As Boolean) As String
-    Dim p As Long, tail As String
+    Dim p As Long, tail As String, parts() As String, i As Long, keep As String, pt As String
     p = InStrRev(w, ".")
     If p > 1 And p < Len(w) Then
         tail = Mid$(w, p + 1)
         If (tail Like "*#*" And Len(tail) >= 3) Or EcmLooksCode(tail) Then w = Left$(w, p - 1)
     End If
-    If Not isFirst Then
+    ' Codes joined to the name with hyphens: ABA123456789-9F3E7A...-AMAZON -> AMAZON.
+    If InStr(w, "-") > 0 Then
+        parts = Split(w, "-")
+        For i = 0 To UBound(parts)
+            pt = parts(i)
+            If pt <> "" Then
+                If isFirst And keep = "" Then
+                    If Not EcmDigitCode(pt) Then keep = pt
+                ElseIf Not ((pt Like "*#*" And Len(pt) >= 3) Or EcmLooksCode(pt)) Then
+                    keep = keep & IIf(keep = "", "", "-") & pt
+                End If
+            End If
+        Next i
+        w = keep
+        If w = "" Then Exit Function
+    End If
+    If isFirst Then
+        If EcmDigitCode(w) Then Exit Function
+    Else
         If w Like "*#*" Then Exit Function
         If afterMark And EcmLooksCode(w) Then Exit Function
     End If
     EcmKeepWord = w
 End Function
 
+' A number code rather than a name: 6 or more characters with 3 or more
+' digits (ABA123456789, a bank's routing number) - not 7-ELEVEN or 1ST.
+Private Function EcmDigitCode(ByVal w As String) As Boolean
+    Dim i As Long, n As Long
+    If Len(w) < 6 Then Exit Function
+    For i = 1 To Len(w)
+        If Mid$(w, i, 1) Like "#" Then n = n + 1
+    Next i
+    EcmDigitCode = (n >= 3)
+End Function
+
 ' A letters-only reference code: 6 or more capitals with 5 consonants in a
-' row, or hardly any vowels ("CZNNFWBGO") - not a word or name like
+' row, or hardly any vowels ("QXZKWPRTB") - not a word or name like
 ' "JOHNSMITH" or "COFFEE".
 Private Function EcmLooksCode(ByVal w As String) As Boolean
     Dim i As Long, c As Long, streak As Long, most As Long, vowels As Long
@@ -5587,7 +5617,7 @@ End Function
 ' A counterparty's merchant: its name without codes (EcmStripCodes), upper
 ' case, punctuation, spaces and a web domain's ending removed -
 ' "AIRBNB * HMP94KJQ23" -> AIRBNB, "SAMS CLUB #4989" -> SAMSCLUB,
-' "AMAZON.COM*MK12", "Amazon.com" and "Amazon.CZNNFWBGO" -> AMAZON.
+' "AMAZON.COM*MK12", "Amazon.com" and "Amazon.QXZKWPRTB" -> AMAZON.
 Private Function EcmMerchantKey(ByVal cp As String) As String
     Dim w As Variant, k As String, cleaned As String, first As Boolean
     cleaned = UCase$(EcmCleanCpName(EcmStripCodes(cp)))
@@ -5601,7 +5631,7 @@ Private Function EcmMerchantKey(ByVal cp As String) As String
 End Function
 
 ' The name written for a merchant: the cleaned name without its codes
-' ("THE HOME DEPOT #0816" -> THE HOME DEPOT, "Amazon.CZNNFWBGO" -> Amazon).
+' ("THE HOME DEPOT #0816" -> THE HOME DEPOT, "Amazon.QXZKWPRTB" -> Amazon).
 Private Function EcmMerchantName(ByVal cp As String) As String
     Dim w As Variant, out As String, cleaned As String, first As Boolean
     cleaned = EcmCleanCpName(EcmStripCodes(cp))
