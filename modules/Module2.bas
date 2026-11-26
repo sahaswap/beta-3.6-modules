@@ -4171,7 +4171,9 @@ End Sub
 '     input cells below, as Excel would (a cell with line breaks in it stays
 '     one cell);
 '   - several input cells selected: the same text into each;
-'   - a dropdown cell takes only one of its choices.
+'   - a dropdown cell takes only one of its choices;
+'   - a case the ECM floater copied (ecm-to-tool.js "Copy to tool"): Ctrl+V
+'     anywhere in the tool fills Sheet1 with it (FillCaseFromPayload).
 ' What was copied stays on the clipboard, so it can go into more cells
 ' (Sheet1's protection otherwise ends a copy made in Excel after the first
 ' paste). Anywhere else - another sheet, a locked cell, a tick box, a
@@ -4183,12 +4185,17 @@ Public Sub OsddPaste()
     On Error GoTo NativePaste
     Set ws = ThisWorkbook.Sheets("Sheet1")
     If Not ActiveWorkbook Is ThisWorkbook Then GoTo NativePaste
+    txt = ClipboardText()
+    If IsCasePayload(txt) Then
+        On Error GoTo Failed
+        FillCaseFromPayload txt
+        Exit Sub
+    End If
     If Not ActiveSheet Is ws Then GoTo NativePaste
     If TypeName(Selection) <> "Range" Then GoTo NativePaste
     If Application.CutCopyMode = xlCut Then GoTo NativePaste
     Set start = PasteTarget(ActiveCell)
     If start Is Nothing Then GoTo NativePaste
-    txt = ClipboardText()
     If Len(txt) = 0 Then GoTo NativePaste
     ' Cells copied in Excel come one per row; anything else is one value.
     If Application.CutCopyMode = xlCopy Then
@@ -4244,6 +4251,332 @@ NativePaste:
         ActiveSheet.Paste
     End If
 End Sub
+
+' Whether txt is a case the ECM floater (ecm-to-tool.js) copied: "AMLTOOL1",
+' the separator ChrW(166), then key=value pairs split by it - all on one line.
+Private Function IsCasePayload(ByVal txt As String) As Boolean
+    IsCasePayload = (Left$(txt, 9) = "AMLTOOL1" & ChrW(166))
+End Function
+
+' Fills Sheet1 from a case the ECM floater copied: ECM Case (J9), Alert ID
+' (J10), Customer Name (J13), Customer Address (J14), the country's ISO Code 2
+' (L27 - Sheet1 fills the country, ISO Code 3 and the risk from it), Program
+' Name (J7: the Program_Library entry that matches ECM's program), the
+' customer's phone (AA14), email (AB14) and other addresses (X14:Z14), and
+' counterparties 1-5 - name (J18-J22), then address (T18-T22).
+' Each is written as if typed, events on, so Sheet1 capitalises names and
+' addresses and fills the Negative News cells. A blank field is left as it is.
+' Another case already on Sheet1 is cleared first, as Reset clears it, once
+' the user says so; the same case again is just filled in again.
+Private Sub FillCaseFromPayload(ByVal txt As String)
+    Dim ws As Worksheet, parts() As String, i As Long, p As Long, k As String, v As String
+    Dim ecm As String, alertId As String, nm As String, addr As String, ctry As String
+    Dim pDesc As String, pName As String, iso2 As String, prog As String, word As String
+    Dim cur As String, done As String, notes As String, phone As String, email As String
+    Dim oa(1 To 3) As String, cpName(1 To 5) As String, cpAddr(1 To 5) As String, n As Long, nOa As Long, nCp As Long
+
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    parts = Split(Replace(Replace(txt, vbCr, " "), vbLf, " "), ChrW(166))
+    For i = 1 To UBound(parts)
+        p = InStr(parts(i), "=")
+        If p > 1 Then
+            k = LCase$(Trim$(Left$(parts(i), p - 1)))
+            v = Trim$(Mid$(parts(i), p + 1))
+            Select Case k
+                Case "ecm": ecm = v
+                Case "alert": alertId = v
+                Case "name": nm = v
+                Case "address": addr = v
+                Case "country": ctry = v
+                Case "progdesc": pDesc = v
+                Case "progname": pName = v
+                Case "phone": phone = v
+                Case "email": email = v
+                Case "oaddr1", "oaddr2", "oaddr3": oa(CLng(Right$(k, 1))) = v
+                Case Else
+                    If k Like "c[1-5]name" Then cpName(CLng(Mid$(k, 2, 1))) = v
+                    If k Like "c[1-5]addr" Then cpAddr(CLng(Mid$(k, 2, 1))) = v
+            End Select
+        End If
+    Next i
+    If ecm = "" Then
+        MsgBox "The copied case has no ECM Case - press Read in the ECM panel, then Copy to tool again.", _
+            vbExclamation, "Fill from ECM"
+        Exit Sub
+    End If
+
+    Application.EnableEvents = True
+    ws.Activate
+    cur = Trim$(CellStr(ws.Range("J9").Value))
+    If cur <> "" And cur <> ecm Then
+        If MsgBox("Sheet1 has ECM case " & cur & ". Fill it with case " & ecm & " instead?" & vbCrLf & vbCrLf & _
+            "Everything Reset clears is cleared first - the decision, counterparties, OSDD inputs and country.", _
+            vbQuestion + vbYesNo, "Fill from ECM") <> vbYes Then Exit Sub
+        ClearCaseInputs ws
+    End If
+
+    PutCaseValue ws, "J9", ecm
+    done = "ECM Case"
+    If alertId <> "" Then
+        PutCaseValue ws, "J10", alertId
+        done = done & ", Alert ID"
+    End If
+    If nm <> "" Then
+        PutCaseValue ws, "J13", nm
+        done = done & ", Customer Name"
+    End If
+    If addr <> "" Then
+        PutCaseValue ws, "J14", addr
+        done = done & ", Customer Address"
+    End If
+    If ctry <> "" Then
+        iso2 = CountryIso2(ws, ctry)
+        If iso2 <> "" Then
+            PutCaseValue ws, "L27", iso2
+            done = done & ", Country (" & iso2 & ")"
+        Else
+            notes = notes & vbCrLf & "Country: """ & ctry & """ isn't in Sheet1's country list - pick it yourself."
+        End If
+    End If
+    If pDesc <> "" Or pName <> "" Then
+        prog = MatchProgram(pDesc, word)
+        If prog = "" Then prog = MatchProgram(pName, word)
+        If prog <> "" Then
+            PutCaseValue ws, "J7", prog
+            done = done & ", Program Name"
+            If word <> "" Then
+                notes = notes & vbCrLf & "Program Name: """ & Trim$(prog) & """ was matched only on the word """ & _
+                    word & """ - please check."
+            End If
+        Else
+            notes = notes & vbCrLf & "Program: """ & IIf(pDesc <> "", pDesc, pName) & _
+                """ isn't in Program_Library - pick Program Name yourself."
+        End If
+    End If
+    If phone <> "" Then
+        PutCaseValue ws, "AA14", phone
+        done = done & ", Phone"
+    End If
+    If email <> "" Then
+        PutCaseValue ws, "AB14", email
+        done = done & ", Email"
+    End If
+    For n = 1 To 3
+        If oa(n) <> "" Then
+            PutCaseValue ws, Choose(n, "X14", "Y14", "Z14"), oa(n)
+            nOa = nOa + 1
+        End If
+    Next n
+    If nOa > 0 Then done = done & ", Other address" & IIf(nOa > 1, "es (" & nOa & ")", "")
+    ' Each counterparty's name before its address, so Sheet1 fills its
+    ' Negative News cell from the name.
+    For n = 1 To 5
+        If cpName(n) <> "" Then
+            PutCaseValue ws, "J" & (17 + n), cpName(n)
+            nCp = nCp + 1
+        End If
+        If cpAddr(n) <> "" Then PutCaseValue ws, "T" & (17 + n), cpAddr(n)
+    Next n
+    If nCp > 0 Then done = done & ", Counterparties (" & nCp & ")"
+    MsgBox "Sheet1 filled from ECM case " & ecm & ":" & vbCrLf & "   " & done & "." & notes & vbCrLf & vbCrLf & _
+        "Check the fields before going on.", vbInformation, "Fill from ECM"
+End Sub
+
+' What Reset (ClearForm) clears, cleared the way it clears it - events off -
+' before another case goes on Sheet1.
+Private Sub ClearCaseInputs(ByVal ws As Worksheet)
+    Dim evts As Boolean
+    evts = Application.EnableEvents
+    Application.EnableEvents = False
+    On Error Resume Next
+    ws.Unprotect Password:="p7ss"
+    ws.Range("J5:J11, J13:J15, J18:J23, T18:T23, G27, L27:S27, T27:U27, V14:AB14, V18:AB22").Value = ""
+    ws.Protect Password:="p7ss"
+    Application.EnableEvents = evts
+    Application.Run "RefreshSearchMatrixHyperlinks"
+    On Error GoTo 0
+End Sub
+
+' One value into Sheet1 as if typed: unprotected first (Program Name can be
+' locked), events on so Sheet1's own handling runs; a value starting = + - @
+' is kept as text (a text-format cell, like Phone, keeps it as it is).
+Private Sub PutCaseValue(ByVal ws As Worksheet, ByVal addr As String, ByVal v As String)
+    On Error Resume Next
+    ThisWorkbook.Unprotect Password:="p7ss"
+    ws.Unprotect Password:="p7ss"
+    On Error GoTo 0
+    If ws.Range(addr).NumberFormat <> "@" And v Like "[=+@-]*" Then v = "'" & v
+    ws.Range(addr).Value = v
+End Sub
+
+' The ISO Code 2 for ECM's country - "US - United States", "USA - ...", "US"
+' or "United States" - from Sheet1's country table (O37:O290 names, P ISO 2,
+' Q ISO 3); "" when it isn't there.
+Private Function CountryIso2(ByVal ws As Worksheet, ByVal v As String) As String
+    Dim p As Long, code As String, rest As String, m As Variant
+    v = Trim$(v)
+    If v = "" Then Exit Function
+    p = InStr(v, " - ")
+    If p > 0 Then
+        code = UCase$(Trim$(Left$(v, p - 1)))
+        rest = Trim$(Mid$(v, p + 3))
+    Else
+        code = UCase$(v)
+        rest = v
+    End If
+    m = CVErr(xlErrNA)
+    If Len(code) = 2 Then
+        m = Application.Match(code, ws.Range("P37:P290"), 0)
+    ElseIf Len(code) = 3 Then
+        m = Application.Match(code, ws.Range("Q37:Q290"), 0)
+    End If
+    If IsError(m) Then m = Application.Match(rest, ws.Range("O37:O290"), 0)
+    If Not IsError(m) Then CountryIso2 = Trim$(CellStr(ws.Range("P37:P290").Cells(CLng(m), 1).Value))
+End Function
+
+' The Program_Library (A1:A97) entry for ECM's program text, or "" - tried as
+' the ECM import tries it: the same name, one of the entry's other names (in
+' brackets, or either side of a /), the longest name one starts with, then a
+' shared distinctive word (word comes back as that word, to be checked).
+Private Function MatchProgram(ByVal v As String, ByRef word As String) As String
+    Dim lib As Range, c As Range, alts As Variant, a As Variant, nv As String, na As String
+    Dim bestLen As Long, best As String, entry As String
+    Dim vw As Variant, lw As Variant, nShared As Long, extra As Long, bestNShared As Long, bestExtra As Long
+    Dim w As String, bestWord As String
+
+    word = ""
+    nv = ProgNorm(v)
+    If nv = "" Then Exit Function
+    On Error Resume Next
+    Set lib = ThisWorkbook.Sheets("Program_Library").Range("A1:A97")
+    On Error GoTo 0
+    If lib Is Nothing Then Exit Function
+
+    For Each c In lib.Cells                                   ' 1. the same name
+        entry = CellStr(c.Value)
+        If Trim$(entry) <> "" Then
+            If ProgNorm(entry) = nv Then
+                MatchProgram = entry
+                Exit Function
+            End If
+        End If
+    Next c
+    For Each c In lib.Cells                                   ' 2. one of its other names
+        entry = CellStr(c.Value)
+        If Trim$(entry) <> "" Then
+            For Each a In ProgAltNames(entry)
+                If ProgNorm(CStr(a)) = nv Then
+                    MatchProgram = entry
+                    Exit Function
+                End If
+            Next a
+        End If
+    Next c
+    For Each c In lib.Cells                                   ' 3. the longest name one starts with
+        entry = CellStr(c.Value)
+        If Trim$(entry) <> "" Then
+            For Each a In ProgAltNames(entry)
+                na = ProgNorm(CStr(a))
+                If Len(na) >= 3 Then
+                    If (nv & " ") Like (na & " *") Or (na & " ") Like (nv & " *") Then
+                        If Len(na) > bestLen Then
+                            bestLen = Len(na)
+                            best = entry
+                        End If
+                    End If
+                End If
+            Next a
+        End If
+    Next c
+    If best <> "" Then
+        MatchProgram = best
+        Exit Function
+    End If
+
+    bestExtra = 9999
+    For Each c In lib.Cells                                   ' 4. a shared distinctive word
+        entry = CellStr(c.Value)
+        If Trim$(entry) <> "" Then
+            nShared = 0
+            extra = 0
+            w = ""
+            For Each lw In Split(ProgNorm(Replace(Replace(Replace(entry, "(", " "), ")", " "), "/", " ")), " ")
+                If Not ProgGenericWord(CStr(lw)) Then
+                    extra = extra + 1
+                    For Each vw In Split(nv, " ")
+                        If CStr(vw) = CStr(lw) Then
+                            nShared = nShared + 1
+                            extra = extra - 1
+                            w = CStr(lw)
+                            Exit For
+                        End If
+                    Next vw
+                End If
+            Next lw
+            If nShared > 0 Then
+                If nShared > bestNShared Or (nShared = bestNShared And extra < bestExtra) Then
+                    bestNShared = nShared
+                    bestExtra = extra
+                    best = entry
+                    bestWord = w
+                End If
+            End If
+        End If
+    Next c
+    If best <> "" Then word = bestWord
+    MatchProgram = best
+End Function
+
+' An entry's names to match on: all of it, the part outside brackets and the
+' part inside, each split at "/".
+Private Function ProgAltNames(ByVal full As String) As Variant
+    Dim p As Long, q As Long, outside As String, inside As String
+    p = InStr(full, "(")
+    If p > 0 Then
+        q = InStr(p, full, ")")
+        If q = 0 Then q = Len(full) + 1
+        outside = Left$(full, p - 1) & " " & Mid$(full, q + 1)
+        inside = Mid$(full, p + 1, q - p - 1)
+    Else
+        outside = full
+    End If
+    ProgAltNames = Split(full & "|" & Replace(outside, "/", "|") & "|" & Replace(inside, "/", "|"), "|")
+End Function
+
+' Words too common in program names to match on.
+Private Function ProgGenericWord(ByVal w As String) As Boolean
+    If Len(w) < 3 Then
+        ProgGenericWord = True
+        Exit Function
+    End If
+    Select Case w
+        Case "global", "money", "pay", "payment", "payments", "financial", "finance", "technology", "technologies", _
+             "international", "bank", "banking", "transfer", "transfers", "remit", "remittance", "exchange", _
+             "credit", "union", "card", "cards", "cash", "services", "service", "solutions", "solution", _
+             "securities", "markets", "market", "cooperative", "platform", "digital", "network", "systems", _
+             "group", "holdings", "company", "fintech", "trading", "capital", "usa", "europe", "evolution", "origination"
+            ProgGenericWord = True
+    End Select
+End Function
+
+' A program name for matching: lower case, letters and digits only, without
+' company endings (Inc, Ltd, LLC...) or "the".
+Private Function ProgNorm(ByVal s As String) As String
+    Dim i As Long, ch As String, out As String, w As Variant, words As String
+    s = LCase$(s)
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "[a-z0-9]" Then out = out & ch Else out = out & " "
+    Next i
+    For Each w In Split(Application.WorksheetFunction.Trim(out), " ")
+        Select Case w
+            Case "inc", "ltd", "llc", "corp", "corporation", "co", "pte", "limited", "plc", "gmbh", "sa", "ag", "bv", "lp", "llp", "the"
+            Case Else
+                If w <> "" Then words = words & " " & w
+        End Select
+    Next w
+    ProgNorm = Trim$(words)
+End Function
 
 ' The input cell (top-left of its merged block) that c belongs to, or Nothing
 ' when c is not one Ctrl+V pastes into.
