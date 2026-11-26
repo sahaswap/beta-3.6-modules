@@ -4263,7 +4263,10 @@ End Function
 ' (L27 - Sheet1 fills the country, ISO Code 3 and the risk from it), Program
 ' Name (J7: the Program_Library entry that matches ECM's program), the
 ' customer's phone (AA14), email (AB14) and other addresses (X14:Z14), and
-' counterparties 1-5 - name (J18-J22), then address (T18-T22).
+' counterparties 1-5 - name (J18-J22), then address (T18-T22) and other
+' addresses (X:Z of its row). A case from the floater's "Full case" carries
+' its transaction file (trx=): EcmFullCase then makes the case folder, puts
+' the file in it, runs Export Trx File and fills from the transactions.
 ' Each is written as if typed, events on, so Sheet1 capitalises names and
 ' addresses and fills the Negative News cells. A blank field is left as it is.
 ' Another case already on Sheet1 is cleared first, as Reset clears it, once
@@ -4274,6 +4277,7 @@ Private Sub FillCaseFromPayload(ByVal txt As String)
     Dim pDesc As String, pName As String, iso2 As String, prog As String, word As String
     Dim cur As String, done As String, notes As String, phone As String, email As String
     Dim oa(1 To 3) As String, cpName(1 To 5) As String, cpAddr(1 To 5) As String, n As Long, nOa As Long, nCp As Long
+    Dim cpOa(1 To 5, 1 To 3) As String, m As Long, trxName As String, trxAt As String, hasTrx As Boolean
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
     parts = Split(Replace(Replace(txt, vbCr, " "), vbLf, " "), ChrW(166))
@@ -4293,9 +4297,12 @@ Private Sub FillCaseFromPayload(ByVal txt As String)
                 Case "phone": phone = v
                 Case "email": email = v
                 Case "oaddr1", "oaddr2", "oaddr3": oa(CLng(Right$(k, 1))) = v
+                Case "trx": trxName = v: hasTrx = True
+                Case "trxat": trxAt = v
                 Case Else
                     If k Like "c[1-5]name" Then cpName(CLng(Mid$(k, 2, 1))) = v
                     If k Like "c[1-5]addr" Then cpAddr(CLng(Mid$(k, 2, 1))) = v
+                    If k Like "c[1-5]oa[1-3]" Then cpOa(CLng(Mid$(k, 2, 1)), CLng(Right$(k, 1))) = v
             End Select
         End If
     Next i
@@ -4376,8 +4383,15 @@ Private Sub FillCaseFromPayload(ByVal txt As String)
             nCp = nCp + 1
         End If
         If cpAddr(n) <> "" Then PutCaseValue ws, "T" & (17 + n), cpAddr(n)
+        For m = 1 To 3
+            If cpOa(n, m) <> "" Then PutCaseValue ws, Choose(m, "X", "Y", "Z") & (17 + n), cpOa(n, m)
+        Next m
     Next n
     If nCp > 0 Then done = done & ", Counterparties (" & nCp & ")"
+    If hasTrx Then
+        EcmFullCase ws, ecm, alertId, trxName, trxAt, done & "." & notes
+        Exit Sub
+    End If
     MsgBox "Sheet1 filled from ECM case " & ecm & ":" & vbCrLf & "   " & done & "." & notes & vbCrLf & vbCrLf & _
         "Check the fields before going on.", vbInformation, "Fill from ECM"
 End Sub
@@ -4408,6 +4422,826 @@ Private Sub PutCaseValue(ByVal ws As Worksheet, ByVal addr As String, ByVal v As
     If ws.Range(addr).NumberFormat <> "@" And v Like "[=+@-]*" Then v = "'" & v
     ws.Range(addr).Value = v
 End Sub
+
+'==================================================================
+' FULL CASE FROM ECM
+'
+' The floater's "Full case" reads the case, saves its transaction file to
+' Downloads (Export Transactions on the Statistics page, as
+' <ECM>_<Velocity Alert ID>_<file name>) and copies the case with
+' "trx=<that name>" and "trxat=<yyyymmddhhnnss>". Its Ctrl+V fills Sheet1
+' (FillCaseFromPayload) and then EcmFullCase:
+'   1. makes the case folder where Export Trx File looks for it -
+'      <Desktop>\<ECM>\Transaction Files and \Pivot (START's folders);
+'   2. takes the file from Downloads - waiting while it finishes
+'      downloading, asking for it when it isn't there - unzips a .zip and
+'      copies the Excel file(s) into Transaction Files. A Transaction Files
+'      folder that already has an Excel file is used as it is;
+'   3. runs Export Trx File, which asks Legacy / EN Network / Pivot as usual;
+'   4. fills Sheet1 from the exported transactions (EcmFillFromTransactions)
+'      and says what was done.
+' Nothing is deleted from Downloads; only blank Sheet1 cells are filled.
+'==================================================================
+Private Sub EcmFullCase(ByVal ws As Worksheet, ByVal ecm As String, ByVal alertId As String, _
+    ByVal trxName As String, ByVal trxAt As String, ByVal filled As String)
+    Dim FSO As Object, caseDir As String, trxDir As String, src As String, have As String
+    Dim why As String, steps As String, sig As String, t0 As Date, fillNote As String, made As String
+
+    On Error GoTo Failed
+    Set FSO = CreateObject("Scripting.FileSystemObject")
+    caseDir = EcmCaseFolder(FSO, ecm)
+    trxDir = caseDir & "\Transaction Files"
+    steps = "Case folder: " & caseDir
+
+    have = EcmExcelFiles(trxDir)
+    If have <> "" Then
+        steps = steps & vbCrLf & "Transaction Files already had " & have & " - used as it is, nothing copied."
+    Else
+        src = EcmFindDownload(ecm, trxName, trxAt)
+        If src = "" Then
+            EcmDone ws, ecm, filled, steps & vbCrLf & "No transaction file, so no export. Put it in " & _
+                trxDir & " and press Export Trx File."
+            Exit Sub
+        End If
+        why = EcmPutTrxFile(FSO, src, trxDir, ecm)
+        have = EcmExcelFiles(trxDir)
+        If why = "" And have = "" Then why = "No Excel file came out of " & FSO.GetFileName(src) & "."
+        If why <> "" Then
+            EcmDone ws, ecm, filled, steps & vbCrLf & why & vbCrLf & "No export was run."
+            Exit Sub
+        End If
+        steps = steps & vbCrLf & "Transaction Files: " & have
+        If LCase$(FSO.GetExtensionName(src)) = "zip" Then steps = steps & " (unzipped from " & FSO.GetFileName(src) & ")"
+    End If
+
+    ' Export Trx File, as if its button were pressed on Sheet1.
+    sig = EcmCdSignature()
+    t0 = Now
+    Application.StatusBar = False
+    ThisWorkbook.Activate
+    ws.Activate
+    Application.Run "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!Consolidated_AML_Workflow"
+    made = EcmNewExport(FSO, caseDir, t0)
+    If made = "" Then
+        steps = steps & vbCrLf & "Export Trx File did not finish (cancelled, or it stopped with a message) - " & _
+            "press it when ready; the counterparties then need filling in yourself."
+    Else
+        steps = steps & vbCrLf & "Exported: " & made
+        If EcmCdSignature() <> sig Or EcmCdHasAlert(alertId) Then
+            fillNote = EcmFillFromTransactions(ws)
+        Else
+            fillNote = "Counterparties and addresses not filled - this export did not refresh ConsolidatedData " & _
+                "(Pivot Analysis leaves it as it was)."
+        End If
+    End If
+    EcmDone ws, ecm, filled, steps & IIf(fillNote <> "", vbCrLf & vbCrLf & fillNote, "")
+    Exit Sub
+
+Failed:
+    EcmDone ws, ecm, filled, steps & vbCrLf & "Stopped by error " & Err.Number & ": " & Err.Description
+End Sub
+
+' The closing message, over every window, with Sheet1 in front.
+Private Sub EcmDone(ByVal ws As Worksheet, ByVal ecm As String, ByVal filled As String, ByVal steps As String)
+    Application.StatusBar = False
+    On Error Resume Next
+    ThisWorkbook.Activate
+    ws.Activate
+    On Error GoTo 0
+    TopMostMsgBox "Case " & ecm & " from ECM" & vbCrLf & vbCrLf & "Sheet1: " & filled & vbCrLf & vbCrLf & _
+        steps & vbCrLf & vbCrLf & "Check the fields before going on.", "Full case from ECM", vbInformation
+End Sub
+
+' <Desktop>\<ECM> with its Transaction Files and Pivot folders - the Desktop
+' Export Trx File uses - made where missing.
+Private Function EcmCaseFolder(ByVal FSO As Object, ByVal ecm As String) As String
+    Dim root As String
+    root = CreateObject("WScript.Shell").SpecialFolders("Desktop") & "\" & ecm
+    If Not FSO.FolderExists(root) Then FSO.CreateFolder root
+    If Not FSO.FolderExists(root & "\Transaction Files") Then FSO.CreateFolder root & "\Transaction Files"
+    If Not FSO.FolderExists(root & "\Pivot") Then FSO.CreateFolder root & "\Pivot"
+    EcmCaseFolder = root
+End Function
+
+' The Excel files in a folder (not Excel's ~$ lock files), as "a.xlsx, b.xlsx".
+Private Function EcmExcelFiles(ByVal folder As String) As String
+    Dim f As String
+    f = Dir$(folder & "\*.xls*")
+    Do While f <> ""
+        If Left$(f, 2) <> "~$" Then EcmExcelFiles = EcmExcelFiles & IIf(EcmExcelFiles = "", "", ", ") & f
+        f = Dir$()
+    Loop
+End Function
+
+' Windows' Downloads folder, wherever it has been moved to.
+Private Function EcmDownloadsFolder() As String
+    Dim p As String
+    On Error Resume Next
+    p = CreateObject("Shell.Application").Namespace(CVar("shell:Downloads")).Self.path
+    On Error GoTo 0
+    If p = "" Then p = Environ$("USERPROFILE") & "\Downloads"
+    EcmDownloadsFolder = p
+End Function
+
+' "yyyymmddhhnnss" as a date (0 when it isn't one).
+Private Function EcmStamp(ByVal s As String) As Date
+    On Error Resume Next
+    If Len(s) = 14 And IsNumeric(s) Then
+        EcmStamp = DateSerial(CLng(Left$(s, 4)), CLng(Mid$(s, 5, 2)), CLng(Mid$(s, 7, 2))) + _
+                   TimeSerial(CLng(Mid$(s, 9, 2)), CLng(Mid$(s, 11, 2)), CLng(Mid$(s, 13, 2)))
+    End If
+End Function
+
+' Seconds since t0 (a Timer value), across midnight too.
+Private Function EcmElapsed(ByVal t0 As Single) As Single
+    EcmElapsed = Timer - t0
+    If EcmElapsed < 0 Then EcmElapsed = EcmElapsed + 86400
+End Function
+
+' The case's transaction file in Downloads, once it has finished
+' downloading. Waits 20 seconds for it, or 3 minutes while the browser is
+' still downloading something; then asks for it. "" = none.
+Private Function EcmFindDownload(ByVal ecm As String, ByVal trxName As String, ByVal trxAt As String) As String
+    Dim dl As String, since As Date, t0 As Single, f As String, size0 As Double, size1 As Double
+    Dim longest As Single, picked As Variant
+    dl = EcmDownloadsFolder()
+    since = EcmStamp(trxAt)
+    longest = 20
+    size0 = -1
+    t0 = Timer
+    Do
+        f = EcmNewestDownload(dl, ecm, trxName, since)
+        If f <> "" Then
+            size1 = -1
+            On Error Resume Next
+            size1 = FileLen(f)
+            On Error GoTo 0
+            If size1 > 0 And size1 = size0 Then Exit Do      ' there, and no longer growing
+            size0 = size1
+        Else
+            size0 = -1
+        End If
+        If EcmDownloading(dl) Then longest = 180
+        If EcmElapsed(t0) > longest Then
+            f = ""
+            Exit Do
+        End If
+        Application.StatusBar = "ECM case " & ecm & ": waiting for its transaction file in " & dl & " ..."
+        Application.Wait Now + TimeSerial(0, 0, 1)
+        DoEvents
+    Loop
+    Application.StatusBar = False
+    If f = "" Then
+        picked = Application.GetOpenFilename("ECM transaction file (*.zip;*.xlsx;*.xls;*.xlsm;*.csv)," & _
+            "*.zip;*.xlsx;*.xls;*.xlsm;*.csv", , "Case " & ecm & ": pick its transaction file (not found in " & dl & ")")
+        If VarType(picked) = vbString Then f = CStr(picked)
+    End If
+    EcmFindDownload = f
+End Function
+
+' A download still going in Downloads (Chrome / Edge .crdownload, Firefox
+' .part) - one started in the last 3 minutes.
+Private Function EcmDownloading(ByVal dl As String) As Boolean
+    Dim f As String, pat As Variant
+    On Error Resume Next
+    For Each pat In Array("*.crdownload", "*.part", "*.partial")
+        f = Dir$(dl & "\" & pat)
+        Do While f <> ""
+            If FileDateTime(dl & "\" & f) > Now - TimeSerial(0, 3, 0) Then EcmDownloading = True: Exit Function
+            f = Dir$()
+        Loop
+    Next pat
+End Function
+
+' The case's file in Downloads: the name the floater saved it under (or the
+' browser's "name (1).zip" when that name was taken), else the newest
+' "<ECM>_..." zip / Excel / CSV file, else - when ECM's own name was kept -
+' the newest such file saved since the floater asked for it.
+Private Function EcmNewestDownload(ByVal dl As String, ByVal ecm As String, ByVal trxName As String, _
+    ByVal since As Date) As String
+    Dim f As String, base As String, ext As String, rest As String, p As Long, t As Date, bestT As Date, best As String
+    If trxName <> "" Then
+        p = InStrRev(trxName, ".")
+        If p > 1 Then
+            base = Left$(trxName, p - 1)
+            ext = Mid$(trxName, p)
+        Else
+            base = trxName
+            ext = ""
+        End If
+        f = Dir$(dl & "\" & base & "*")
+        Do While f <> ""
+            rest = Mid$(f, Len(base) + 1)
+            If StrComp(rest, ext, vbTextCompare) = 0 Or EcmIsCopyName(rest, ext) Then
+                t = FileDateTime(dl & "\" & f)
+                If best = "" Or t > bestT Then best = dl & "\" & f: bestT = t
+            End If
+            f = Dir$()
+        Loop
+        If best <> "" Then
+            EcmNewestDownload = best
+            Exit Function
+        End If
+    End If
+    best = EcmNewestOf(dl, ecm & "_*", 0)
+    If best = "" And trxName = "" And since > 0 Then best = EcmNewestOf(dl, "*", since - TimeSerial(0, 1, 0))
+    EcmNewestDownload = best
+End Function
+
+' rest = " (1).zip" for ext ".zip" - the browser's name for a second copy.
+Private Function EcmIsCopyName(ByVal rest As String, ByVal ext As String) As Boolean
+    Dim inner As String
+    If Len(rest) < Len(ext) + 4 Then Exit Function
+    If StrComp(Right$(rest, Len(ext)), ext, vbTextCompare) <> 0 Then Exit Function
+    inner = Left$(rest, Len(rest) - Len(ext))
+    If Left$(inner, 2) = " (" And Right$(inner, 1) = ")" Then
+        inner = Mid$(inner, 3, Len(inner) - 3)
+        If Len(inner) > 0 Then EcmIsCopyName = (inner Like String(Len(inner), "#"))
+    End If
+End Function
+
+' The newest zip / Excel / CSV file in folder matching Pattern, saved at or
+' after since - not the ECM_... files the export browser button saves.
+Private Function EcmNewestOf(ByVal folder As String, ByVal Pattern As String, ByVal since As Date) As String
+    Dim f As String, ext As String, t As Date, bestT As Date
+    f = Dir$(folder & "\" & Pattern)
+    Do While f <> ""
+        ext = LCase$(Mid$(f, InStrRev(f, ".") + 1))
+        If (ext = "zip" Or ext Like "xls*" Or ext = "csv") And Not (f Like "ECM_Alert_Info*" Or f Like "ECM_Narratives*") And Left$(f, 2) <> "~$" Then
+            t = FileDateTime(folder & "\" & f)
+            If t >= since And (EcmNewestOf = "" Or t > bestT) Then EcmNewestOf = folder & "\" & f: bestT = t
+        End If
+        f = Dir$()
+    Loop
+End Function
+
+' Puts the transaction file into Transaction Files: an Excel file is copied,
+' a zip is unzipped and the Excel file(s) in it copied. Returns "" when done,
+' otherwise what stopped it.
+Private Function EcmPutTrxFile(ByVal FSO As Object, ByVal src As String, ByVal trxDir As String, _
+    ByVal ecm As String) As String
+    Dim ext As String, tmp As String, csvs As String, n As Long
+    ext = LCase$(FSO.GetExtensionName(src))
+    If ext Like "xls*" Then
+        FSO.CopyFile src, trxDir & "\", False
+        Exit Function
+    End If
+    If ext = "csv" Then
+        FSO.CopyFile src, trxDir & "\", False
+        EcmPutTrxFile = FSO.GetFileName(src) & " is a CSV file (copied into Transaction Files) - Export Trx File reads " & _
+            "Excel files only: open it from there, save it as .xlsx in the same folder, then press Export Trx File."
+        Exit Function
+    End If
+    If ext <> "zip" Then
+        EcmPutTrxFile = FSO.GetFileName(src) & " is not a zip or Excel file."
+        Exit Function
+    End If
+    tmp = Environ$("TEMP") & "\ECM_" & ecm & "_" & Format$(Now, "yyyymmddhhnnss")
+    If Not EcmUnzip(FSO, src, tmp) Then
+        EcmPutTrxFile = "Could not unzip " & FSO.GetFileName(src) & " - unzip it into " & trxDir & _
+            " yourself, then press Export Trx File."
+    Else
+        n = EcmTakeFiles(FSO, FSO.GetFolder(tmp), trxDir, csvs)
+        If n = 0 And csvs <> "" Then
+            EcmPutTrxFile = FSO.GetFileName(src) & " holds " & csvs & " (copied into Transaction Files) - Export Trx File " & _
+                "reads Excel files only: open it from there, save it as .xlsx in the same folder, then press Export Trx File."
+        End If
+    End If
+    On Error Resume Next
+    If FSO.FolderExists(tmp) Then FSO.DeleteFolder tmp, True
+End Function
+
+' Unzips zipPath into dest (made here) with Windows' own zip support; if
+' that gives nothing, with Windows' tar. True when something came out.
+Private Function EcmUnzip(ByVal FSO As Object, ByVal zipPath As String, ByVal dest As String) As Boolean
+    Dim sh As Object, zf As Object, df As Object, want As Long, t0 As Single, size0 As Double, size1 As Double
+    Dim steady As Long
+    On Error Resume Next
+    If Not FSO.FolderExists(dest) Then FSO.CreateFolder dest
+    Set sh = CreateObject("Shell.Application")
+    Set zf = sh.Namespace(CVar(zipPath))
+    Set df = sh.Namespace(CVar(dest))
+    If Not zf Is Nothing And Not df Is Nothing Then
+        want = zf.items.Count
+        df.CopyHere zf.items, 4 + 16 + 1024           ' no progress window, yes to all, no error boxes
+        ' CopyHere returns before it has finished: wait until all of it is
+        ' out and the size has stopped changing.
+        size0 = -1
+        t0 = Timer
+        Do
+            Application.StatusBar = "Unzipping " & FSO.GetFileName(zipPath) & " ..."
+            Application.Wait Now + TimeSerial(0, 0, 1)
+            DoEvents
+            size1 = -2
+            size1 = FSO.GetFolder(dest).Size
+            If df.items.Count >= want And size1 = size0 Then steady = steady + 1 Else steady = 0
+            size0 = size1
+        Loop Until steady >= 2 Or EcmElapsed(t0) > 300
+        Application.StatusBar = False
+    End If
+    If FSO.GetFolder(dest).Files.Count + FSO.GetFolder(dest).SubFolders.Count = 0 Then
+        CreateObject("WScript.Shell").Run "tar -xf """ & zipPath & """ -C """ & dest & """", 0, True
+    End If
+    EcmUnzip = (FSO.GetFolder(dest).Files.Count + FSO.GetFolder(dest).SubFolders.Count > 0)
+End Function
+
+' Copies the Excel files under folder (its sub-folders too) into trxDir,
+' leaving a file of the same name there alone; CSV files are copied too and
+' listed in csvs. Returns how many Excel files there are.
+Private Function EcmTakeFiles(ByVal FSO As Object, ByVal folder As Object, ByVal trxDir As String, _
+    ByRef csvs As String) As Long
+    Dim f As Object, sf As Object, ext As String
+    For Each f In folder.Files
+        ext = LCase$(FSO.GetExtensionName(f.Name))
+        If (ext Like "xls*" Or ext = "csv") And Left$(f.Name, 2) <> "~$" Then
+            If Not FSO.FileExists(trxDir & "\" & f.Name) Then FSO.CopyFile f.path, trxDir & "\", False
+            If ext = "csv" Then
+                csvs = csvs & IIf(csvs = "", "", ", ") & f.Name
+            Else
+                EcmTakeFiles = EcmTakeFiles + 1
+            End If
+        End If
+    Next f
+    For Each sf In folder.SubFolders
+        EcmTakeFiles = EcmTakeFiles + EcmTakeFiles(FSO, sf, trxDir, csvs)
+    Next sf
+End Function
+
+' The newest Excel file Export Trx File saved (in the case folder, or its
+' Pivot folder for Pivot Analysis) since t0, or "".
+Private Function EcmNewExport(ByVal FSO As Object, ByVal caseDir As String, ByVal t0 As Date) As String
+    Dim folder As Variant, f As Object, bestT As Date
+    On Error Resume Next
+    For Each folder In Array(caseDir, caseDir & "\Pivot")
+        For Each f In FSO.GetFolder(CStr(folder)).Files
+            If InStr(1, f.Name, ".xls", vbTextCompare) > 0 And Left$(f.Name, 2) <> "~$" Then
+                If f.DateLastModified >= t0 - TimeSerial(0, 0, 5) And f.DateLastModified > bestT Then
+                    bestT = f.DateLastModified
+                    EcmNewExport = f.Name
+                End If
+            End If
+        Next f
+    Next folder
+End Function
+
+' A short fingerprint of ConsolidatedData, to tell whether an export
+' replaced it.
+Private Function EcmCdSignature() As String
+    Dim cd As Worksheet, ur As Range, n As Long
+    On Error Resume Next
+    Set cd = ThisWorkbook.Sheets("ConsolidatedData")
+    If cd Is Nothing Then Exit Function
+    Set ur = cd.UsedRange
+    n = ur.Row + ur.Rows.Count - 1
+    EcmCdSignature = ur.Address & "|" & CellStr(cd.Cells(2, 1).Value) & "|" & CellStr(cd.Cells(2, 2).Value) & "|" & _
+        CellStr(cd.Cells(n, 1).Value) & "|" & CellStr(cd.Cells(n, 2).Value) & "|" & CellStr(cd.Cells(n, 3).Value)
+End Function
+
+' ConsolidatedData has rows of this Velocity Alert ID.
+Private Function EcmCdHasAlert(ByVal alertId As String) As Boolean
+    Dim cd As Worksheet, m As Variant, v As Variant, r As Long, lastR As Long
+    On Error Resume Next
+    alertId = Trim$(alertId)
+    If alertId = "" Then Exit Function
+    Set cd = ThisWorkbook.Sheets("ConsolidatedData")
+    If cd Is Nothing Then Exit Function
+    m = Application.Match("Velocity Alert ID", cd.Rows(1), 0)
+    If IsError(m) Or IsEmpty(m) Then Exit Function
+    lastR = cd.Cells(cd.Rows.Count, CLng(m)).End(xlUp).Row
+    If lastR < 2 Then Exit Function
+    If lastR = 2 Then
+        EcmCdHasAlert = (StrComp(Trim$(CellStr(cd.Cells(2, CLng(m)).Value)), alertId, vbTextCompare) = 0)
+        Exit Function
+    End If
+    v = cd.Range(cd.Cells(2, CLng(m)), cd.Cells(lastR, CLng(m))).Value
+    For r = 1 To UBound(v, 1)
+        If StrComp(Trim$(CellStr(v(r, 1))), alertId, vbTextCompare) = 0 Then EcmCdHasAlert = True: Exit Function
+    Next r
+End Function
+
+' Sheet1 from the exported transactions (ConsolidatedData); only blank cells
+' are filled. Only the alerted rows ("Is Alerted Transaction?" = Yes) count
+' when the data says which.
+'   Counterparties J18:J22, when all five are blank - the counterparty
+'   sampling rule: for each alert rule ("Alert Information") the
+'   counterparty with the highest total amount (debit and credit added),
+'   rules in order of that amount, one each, at most 5; fewer than 3 is
+'   topped up with the highest amounts left. Names that differ only in
+'   reference codes (words with a digit), punctuation or spaces count as one
+'   merchant, written as the merchant part ("AIRBNB * HMKNMMCRE9" -> AIRBNB).
+'   Each counterparty's addresses, whoever chose the name: its side of its
+'   rows - DR: Beneficiary, CR: Originator, the rule the export's
+'   Counterparty column uses - the most frequent in T, others in X:Z.
+'   The customer's other addresses (X14:Z14): the customer's side of the
+'   rows - DR: Originator, CR: Beneficiary - that differ from J14.
+' An address that is only a country, or the same as one already there (case,
+' punctuation, a country at the end, a missing zip or unit ignored), is
+' left out. Returns what was filled.
+Private Function EcmFillFromTransactions(ByVal ws As Worksheet) As String
+    Const MAX_PICKS As Long = 5
+    Const MIN_PICKS As Long = 3
+    Dim cd As Worksheet, data As Variant, nR As Long, nC As Long, r As Long, i As Long
+    Dim cRule As Long, cCp As Long, cAmt As Long, cDir As Long, cAl As Long
+    Dim cBenN As Long, cBenA As Long, cBenC As Long, cOrgN As Long, cOrgA As Long, cOrgC As Long
+    Dim useRow() As Boolean, rCp() As String, rKey() As String, rRule() As String, rAmt() As Double
+    Dim rCpAddr() As String, rCustAddr() As String, anyYes As Boolean, isDr As Boolean
+    Dim pairVal As Object, varVal As Object, shown As Object, bestVar As Object, total As Object
+    Dim blank As Object, ruleDone As Object, picked As Object, k As Variant, parts() As String
+    Dim pickKey(1 To MAX_PICKS) As String, pickWhy(1 To MAX_PICKS) As String, nPick As Long
+    Dim hadNames As Boolean, bestK As String, bestV As Double, note As String, nm As String, wrote As String
+
+    On Error GoTo Failed
+    Set cd = ThisWorkbook.Sheets("ConsolidatedData")
+    nR = cd.UsedRange.Row + cd.UsedRange.Rows.Count - 1
+    nC = cd.UsedRange.Column + cd.UsedRange.Columns.Count - 1
+    If nR < 2 Or nC < 2 Then
+        EcmFillFromTransactions = "Counterparties and addresses not filled - ConsolidatedData has no transactions."
+        Exit Function
+    End If
+    data = cd.Range(cd.Cells(1, 1), cd.Cells(nR, nC)).Value
+    cRule = EcmCol(data, nC, "Alert Information")
+    cCp = EcmCol(data, nC, "Counterparty")
+    cAmt = EcmCol(data, nC, "Transaction Amount")
+    cDir = EcmCol(data, nC, "Dr Cr")
+    cAl = EcmCol(data, nC, "Is Alerted Transaction")
+    cBenN = EcmCol(data, nC, "Beneficiary Name")
+    cBenA = EcmCol(data, nC, "Beneficiary Address")
+    cBenC = EcmCol(data, nC, "Beneficiary Country")
+    cOrgN = EcmCol(data, nC, "Originator Name")
+    cOrgA = EcmCol(data, nC, "Originator Address")
+    cOrgC = EcmCol(data, nC, "Originator Country")
+    If cCp = 0 And (cBenN = 0 Or cOrgN = 0) Then
+        EcmFillFromTransactions = "Counterparties and addresses not filled - ConsolidatedData has no Counterparty " & _
+            "(or Beneficiary / Originator Name) column."
+        Exit Function
+    End If
+
+    ' Each row once: whether it counts, its counterparty and rule, its amount,
+    ' and the addresses on each side.
+    ReDim useRow(2 To nR): ReDim rCp(2 To nR): ReDim rKey(2 To nR): ReDim rRule(2 To nR)
+    ReDim rAmt(2 To nR): ReDim rCpAddr(2 To nR): ReDim rCustAddr(2 To nR)
+    If cAl > 0 Then
+        For r = 2 To nR
+            If StrComp(Trim$(CellStr(data(r, cAl))), "Yes", vbTextCompare) = 0 Then anyYes = True: Exit For
+        Next r
+    End If
+    For r = 2 To nR
+        useRow(r) = True
+        If anyYes Then useRow(r) = (StrComp(Trim$(CellStr(data(r, cAl))), "Yes", vbTextCompare) = 0)
+        isDr = False
+        If cDir > 0 Then isDr = (UCase$(Trim$(CellStr(data(r, cDir)))) = "DR")
+        If cCp > 0 Then
+            rCp(r) = Trim$(CellStr(data(r, cCp)))
+        ElseIf isDr Then
+            rCp(r) = Trim$(CellStr(data(r, cBenN)))
+        Else
+            rCp(r) = Trim$(CellStr(data(r, cOrgN)))
+        End If
+        If rCp(r) <> "" Then rKey(r) = EcmMerchantKey(rCp(r))
+        If cRule > 0 Then rRule(r) = Trim$(CellStr(data(r, cRule)))
+        If rRule(r) = "" Then rRule(r) = "(no rule)"
+        If cAmt > 0 Then rAmt(r) = Abs(EcmNum(data(r, cAmt)))
+        If isDr Then
+            rCpAddr(r) = EcmAddress(data, r, cBenA, cBenC)
+            rCustAddr(r) = EcmAddress(data, r, cOrgA, cOrgC)
+        Else
+            rCpAddr(r) = EcmAddress(data, r, cOrgA, cOrgC)
+            rCustAddr(r) = EcmAddress(data, r, cBenA, cBenC)
+        End If
+    Next r
+
+    For i = 18 To 22
+        If Trim$(CellStr(ws.Range("J" & i).Value)) <> "" Then hadNames = True
+    Next i
+    If hadNames Then
+        note = "Counterparties already on Sheet1 were kept."
+    Else
+        ' Totals per (rule, merchant), per merchant, and per spelling.
+        Set pairVal = EcmDict(): Set varVal = EcmDict(): Set total = EcmDict(): Set blank = EcmDict()
+        For r = 2 To nR
+            If useRow(r) Then
+                If rKey(r) <> "" Then
+                    k = rRule(r) & vbTab & rKey(r)
+                    pairVal(k) = pairVal(k) + rAmt(r)
+                    total(rKey(r)) = total(rKey(r)) + rAmt(r)
+                    k = rKey(r) & vbTab & rCp(r)
+                    varVal(k) = varVal(k) + rAmt(r)
+                ElseIf rAmt(r) <> 0 Then
+                    blank(rRule(r)) = blank(rRule(r)) + rAmt(r)
+                End If
+            End If
+        Next r
+        ' The name written for a merchant: the merchant part of its biggest spelling.
+        Set shown = EcmDict(): Set bestVar = EcmDict()
+        For Each k In varVal.Keys
+            parts = Split(k, vbTab)
+            If Not bestVar.Exists(parts(0)) Then bestVar(parts(0)) = -1
+            If varVal(k) > bestVar(parts(0)) Then
+                bestVar(parts(0)) = varVal(k)
+                shown(parts(0)) = EcmMerchantName(parts(1))
+            End If
+        Next k
+        ' One per rule, highest first: each time the highest (rule, merchant)
+        ' left whose rule has no pick yet and whose merchant isn't picked.
+        Set ruleDone = EcmDict(): Set picked = EcmDict()
+        Do While nPick < MAX_PICKS
+            bestK = "": bestV = -1
+            For Each k In pairVal.Keys
+                parts = Split(k, vbTab)
+                If Not ruleDone.Exists(parts(0)) And Not picked.Exists(parts(1)) Then
+                    If pairVal(k) > bestV Then bestV = pairVal(k): bestK = k
+                End If
+            Next k
+            If bestK = "" Then Exit Do
+            parts = Split(bestK, vbTab)
+            ruleDone(parts(0)) = parts(1)
+            picked(parts(1)) = True
+            nPick = nPick + 1
+            pickKey(nPick) = parts(1)
+            pickWhy(nPick) = "top of " & parts(0)
+        Loop
+        ' Fewer than 3: the highest amounts left, any rule.
+        Do While nPick < MIN_PICKS
+            bestK = "": bestV = -1
+            For Each k In pairVal.Keys
+                parts = Split(k, vbTab)
+                If Not picked.Exists(parts(1)) Then
+                    If pairVal(k) > bestV Then bestV = pairVal(k): bestK = k
+                End If
+            Next k
+            If bestK = "" Then Exit Do
+            parts = Split(bestK, vbTab)
+            picked(parts(1)) = True
+            nPick = nPick + 1
+            pickKey(nPick) = parts(1)
+            pickWhy(nPick) = "next highest, " & parts(0)
+        Loop
+        For i = 1 To nPick
+            PutCaseValue ws, "J" & (17 + i), CStr(shown(pickKey(i)))
+            note = note & vbCrLf & "   " & i & ". " & shown(pickKey(i)) & "  " & Format$(total(pickKey(i)), "#,##0.00") & _
+                "  (" & pickWhy(i) & ")"
+        Next i
+        For Each k In blank.Keys
+            If ruleDone.Exists(k) Then
+                If blank(k) > pairVal(k & vbTab & ruleDone(k)) Then
+                    note = note & vbCrLf & "   Note: " & Format$(blank(k), "#,##0.00") & " in '" & k & _
+                        "' has no counterparty name - check it."
+                End If
+            End If
+        Next k
+        If nPick = 0 Then note = vbCrLf & "   none - the alerted transactions have no counterparty names."
+        note = "Counterparties from the exported transactions (" & ruleDone.Count & " alert rule" & _
+            IIf(ruleDone.Count = 1, "", "s") & "):" & note
+    End If
+
+    For i = 18 To 22
+        nm = Trim$(CellStr(ws.Range("J" & i).Value))
+        If nm <> "" Then
+            wrote = EcmPutAddresses(ws, "T" & i, Array("X" & i, "Y" & i, "Z" & i), _
+                EcmAddrsFor(EcmMerchantKey(nm), useRow, rKey, rCpAddr, nR), "")
+            If wrote <> "" Then note = note & vbCrLf & "   " & nm & ": " & wrote
+        End If
+    Next i
+    wrote = EcmPutAddresses(ws, "", Array("X14", "Y14", "Z14"), EcmAddrsFor("", useRow, rKey, rCustAddr, nR), _
+        CellStr(ws.Range("J14").Value))
+    If wrote <> "" Then note = note & vbCrLf & "Customer: " & wrote
+    EcmFillFromTransactions = note
+    Exit Function
+
+Failed:
+    EcmFillFromTransactions = note & IIf(note <> "", vbCrLf, "") & "Filling from the transactions stopped: error " & _
+        Err.Number & " - " & Err.Description
+End Function
+
+' The distinct addresses in rAddr of the counting rows of one merchant (key)
+' - all counting rows when key is "" - most frequent first.
+Private Function EcmAddrsFor(ByVal key As String, ByRef useRow() As Boolean, ByRef rKey() As String, _
+    ByRef rAddr() As String, ByVal nR As Long) As Collection
+    Dim addrKeys() As String, addrTexts() As String, addrCounts() As Long, done() As Boolean
+    Dim n As Long, r As Long, j As Long, best As Long, k As String, out As New Collection
+    ReDim addrKeys(1 To 1): ReDim addrTexts(1 To 1): ReDim addrCounts(1 To 1)
+    For r = 2 To nR
+        If useRow(r) And rAddr(r) <> "" Then
+            If key = "" Or rKey(r) = key Then
+                k = EcmAddrKey(rAddr(r))
+                For j = 1 To n
+                    If EcmSameAddrKey(addrKeys(j), k) Then Exit For
+                Next j
+                If j > n Then
+                    n = n + 1
+                    ReDim Preserve addrKeys(1 To n): ReDim Preserve addrTexts(1 To n): ReDim Preserve addrCounts(1 To n)
+                    addrKeys(n) = k
+                    addrTexts(n) = rAddr(r)
+                End If
+                addrCounts(j) = addrCounts(j) + 1
+            End If
+        End If
+    Next r
+    If n > 0 Then
+        ReDim done(1 To n)
+        For r = 1 To n
+            best = 0
+            For j = 1 To n
+                If Not done(j) Then
+                    If best = 0 Then
+                        best = j
+                    ElseIf addrCounts(j) > addrCounts(best) Then
+                        best = j
+                    End If
+                End If
+            Next j
+            done(best) = True
+            out.Add addrTexts(best)
+        Next r
+    End If
+    Set EcmAddrsFor = out
+End Function
+
+' Writes addresses from list into blank cells - mainCell first (when given),
+' then the others - leaving out any the row already has (or alsoHave).
+' Returns what was written, e.g. "address + 2 other addresses (X:Z)".
+Private Function EcmPutAddresses(ByVal ws As Worksheet, ByVal mainCell As String, ByVal others As Variant, _
+    ByVal list As Collection, ByVal alsoHave As String) As String
+    Dim have As New Collection, a As Variant, c As Variant, h As Variant, k As String, slot As String
+    Dim dup As Boolean, nMain As Long, nOther As Long
+    If Trim$(alsoHave) <> "" Then have.Add EcmAddrKey(alsoHave)
+    If mainCell <> "" Then
+        If Trim$(CellStr(ws.Range(mainCell).Value)) <> "" Then have.Add EcmAddrKey(CellStr(ws.Range(mainCell).Value))
+    End If
+    For Each c In others
+        If Trim$(CellStr(ws.Range(CStr(c)).Value)) <> "" Then have.Add EcmAddrKey(CellStr(ws.Range(CStr(c)).Value))
+    Next c
+    For Each a In list
+        k = EcmAddrKey(CStr(a))
+        dup = False
+        For Each h In have
+            If EcmSameAddrKey(CStr(h), k) Then dup = True: Exit For
+        Next h
+        If Not dup Then
+            slot = ""
+            If mainCell <> "" Then
+                If Trim$(CellStr(ws.Range(mainCell).Value)) = "" Then slot = mainCell
+            End If
+            If slot = "" Then
+                For Each c In others
+                    If Trim$(CellStr(ws.Range(CStr(c)).Value)) = "" Then slot = CStr(c): Exit For
+                Next c
+            End If
+            If slot = "" Then Exit For
+            PutCaseValue ws, slot, CStr(a)
+            have.Add k
+            If slot = mainCell Then nMain = nMain + 1 Else nOther = nOther + 1
+        End If
+    Next a
+    If nMain > 0 Then EcmPutAddresses = "address"
+    If nOther > 0 Then
+        EcmPutAddresses = EcmPutAddresses & IIf(nMain > 0, " + ", "") & nOther & " other address" & _
+            IIf(nOther > 1, "es", "") & " (" & Left$(others(LBound(others)), 1) & ":" & _
+            Left$(others(UBound(others)), 1) & ")"
+    End If
+End Function
+
+' An address cell of row r, with its country added when it doesn't end with
+' it; "" for a blank, a country alone or "N/A".
+Private Function EcmAddress(ByRef data As Variant, ByVal r As Long, ByVal cA As Long, ByVal cC As Long) As String
+    Dim a As String, cty As String
+    If cA = 0 Then Exit Function
+    a = Application.WorksheetFunction.Trim(Replace(Replace(CellStr(data(r, cA)), vbCr, " "), vbLf, " "))
+    If cC > 0 Then cty = Trim$(CellStr(data(r, cC)))
+    If a = "" Or EcmCountryOnly(a) Then Exit Function
+    Select Case AddrKey(a)
+        Case "NA", "NONE", "UNKNOWN", "NULL", "BLANK"
+            Exit Function
+    End Select
+    If cty <> "" And AddrKey(cty) <> "" Then
+        If Right$(AddrKey(a), Len(AddrKey(cty))) <> AddrKey(cty) Then a = a & ", " & cty
+    End If
+    EcmAddress = a
+End Function
+
+Private Function EcmCountryOnly(ByVal a As String) As Boolean
+    Dim k As String
+    k = AddrKey(a)
+    EcmCountryOnly = (Len(k) <= 3 Or k = "UNITEDSTATES" Or k = "UNITEDSTATESOFAMERICA" Or k = "UNITEDKINGDOM")
+End Function
+
+' An address for comparing: letters and digits only, without a country (or
+' state) code at the end - "12 Main St, Springfield, IL 62701, US" and
+' "12 MAIN ST SPRINGFIELD IL 62701" give the same.
+Private Function EcmAddrKey(ByVal a As String) As String
+    Dim s As String, i As Long, ch As String, w() As String, n As Long, suffix As Variant
+    s = UCase$(a)
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If Not (ch Like "[A-Z0-9]") Then Mid(s, i, 1) = " "
+    Next i
+    s = Application.WorksheetFunction.Trim(s)
+    For Each suffix In Array(" UNITED STATES OF AMERICA", " UNITED STATES", " USA", " US")
+        If Len(s) > Len(suffix) And Right$(s, Len(suffix)) = suffix Then
+            s = Left$(s, Len(s) - Len(suffix))
+            Exit For
+        End If
+    Next suffix
+    w = Split(s, " ")
+    n = UBound(w)
+    If n >= 2 Then
+        If w(n) Like "[A-Z][A-Z]" Or w(n) Like "[A-Z][A-Z][A-Z]" Then s = Left$(s, Len(s) - Len(w(n)) - 1)
+    End If
+    EcmAddrKey = Replace(s, " ", "")
+End Function
+
+' The same address: equal keys, or one holds all of the other.
+Private Function EcmSameAddrKey(ByVal a As String, ByVal b As String) As Boolean
+    If a = "" Or b = "" Then Exit Function
+    If a = b Then
+        EcmSameAddrKey = True
+    ElseIf Len(a) > Len(b) Then
+        EcmSameAddrKey = (Len(b) >= 8 And InStr(1, a, b, vbBinaryCompare) > 0)
+    Else
+        EcmSameAddrKey = (Len(a) >= 8 And InStr(1, b, a, vbBinaryCompare) > 0)
+    End If
+End Function
+
+' A row-1 header's column in data: the exact name first, then one that
+' starts with it. 0 when there is none.
+Private Function EcmCol(ByRef data As Variant, ByVal nC As Long, ByVal head As String) As Long
+    Dim c As Long, h As String
+    For c = 1 To nC
+        If StrComp(Trim$(CellStr(data(1, c))), head, vbTextCompare) = 0 Then EcmCol = c: Exit Function
+    Next c
+    For c = 1 To nC
+        h = Trim$(CellStr(data(1, c)))
+        If Len(h) > Len(head) And StrComp(Left$(h, Len(head)), head, vbTextCompare) = 0 Then EcmCol = c: Exit Function
+    Next c
+End Function
+
+Private Function EcmDict() As Object
+    Set EcmDict = CreateObject("Scripting.Dictionary")
+    EcmDict.CompareMode = vbTextCompare
+End Function
+
+' An amount cell as a number ("$1,234.50", "(12.00)" and blanks too).
+Private Function EcmNum(ByVal v As Variant) As Double
+    Dim s As String, neg As Boolean
+    If IsError(v) Then Exit Function
+    If IsNumeric(v) And Not IsEmpty(v) Then EcmNum = CDbl(v): Exit Function
+    s = Trim$(CStr(v))
+    If Left$(s, 1) = "(" And Right$(s, 1) = ")" Then neg = True: s = Mid$(s, 2, Len(s) - 2)
+    s = Replace(Replace(Replace(s, "$", ""), ",", ""), " ", "")
+    If IsNumeric(s) Then EcmNum = CDbl(s)
+    If neg Then EcmNum = -EcmNum
+End Function
+
+' A counterparty name safe for file names, merging and searches: characters
+' Windows forbids in file names become a space, other punctuation goes;
+' letters (accented too), digits, spaces, hyphens and "&" stay.
+Private Function EcmCleanCpName(ByVal s As String) As String
+    Dim i As Long, ch As String, out As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "[A-Za-z0-9-]" Or ch = " " Or ch = "&" Then
+            out = out & ch
+        ElseIf AscW(ch) >= 192 And (UCase$(ch) <> LCase$(ch) Or AscW(ch) >= 12288) Then
+            out = out & ch
+        ElseIf InStr("\/:*?""<>|" & vbTab & vbCr & vbLf, ch) > 0 Then
+            out = out & " "
+        End If
+    Next i
+    out = Application.WorksheetFunction.Trim(out)
+    Do While Left$(out, 1) = "-": out = Trim$(Mid$(out, 2)): Loop
+    Do While Right$(out, 1) = "-": out = Trim$(Left$(out, Len(out) - 1)): Loop
+    EcmCleanCpName = out
+End Function
+
+' A counterparty's merchant: upper-case words without digits (the first word
+' always counts, for names like "7-ELEVEN"), punctuation and spaces removed -
+' "AIRBNB * HMP94KJQ23" -> AIRBNB, "SAMS CLUB #4989" -> SAMSCLUB.
+Private Function EcmMerchantKey(ByVal cp As String) As String
+    Dim w As Variant, k As String, cleaned As String, first As Boolean
+    cleaned = UCase$(EcmCleanCpName(cp))
+    first = True
+    For Each w In Split(cleaned, " ")
+        If first Or Not (w Like "*[0-9]*") Then k = k & Replace(CStr(w), "-", "")
+        first = False
+    Next w
+    If k = "" Then k = Replace(Replace(cleaned, " ", ""), "-", "")
+    EcmMerchantKey = k
+End Function
+
+' The name written for a merchant: the cleaned name without its coded words
+' ("THE HOME DEPOT #0816" -> THE HOME DEPOT).
+Private Function EcmMerchantName(ByVal cp As String) As String
+    Dim w As Variant, out As String, cleaned As String, first As Boolean
+    cleaned = EcmCleanCpName(cp)
+    first = True
+    For Each w In Split(cleaned, " ")
+        If (first Or Not (w Like "*[0-9]*")) And w <> "&" Then out = out & " " & w
+        first = False
+    Next w
+    out = Trim$(out)
+    If out = "" Then out = cleaned
+    EcmMerchantName = out
+End Function
 
 ' The ISO Code 2 for ECM's country - "US - United States", "USA - ...", "US"
 ' or "United States" - from Sheet1's country table (O37:O290 names, P ISO 2,
